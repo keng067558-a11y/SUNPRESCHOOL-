@@ -63,6 +63,54 @@ div[data-testid="stTextArea"] textarea,
 div[data-testid="stDateInput"] input,
 div[data-testid="stSelectbox"] > div{ border-radius:14px !important; }
 hr{ border:none; border-top:1px solid var(--line); margin:10px 0 14px; }
+
+/* 卡片 */
+.k-card{
+  background:#fff;
+  border:1px solid rgba(0,0,0,0.06);
+  border-radius:18px;
+  box-shadow:0 10px 26px rgba(0,0,0,0.06);
+  padding:14px 14px 12px 14px;
+  margin-bottom:12px;
+}
+.k-title{
+  font-size:1.05rem;
+  font-weight:900;
+  letter-spacing:-0.01em;
+  margin:0;
+  color:#1D1D1F;
+}
+.k-sub{
+  margin-top:4px;
+  color:#6E6E73;
+  font-size:.9rem;
+}
+.k-row{
+  margin-top:10px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+}
+.badge{
+  display:inline-block;
+  padding:4px 10px;
+  border-radius:999px;
+  font-size:.82rem;
+  border:1px solid rgba(0,0,0,.08);
+  background:rgba(0,0,0,.03);
+  color:#1D1D1F;
+}
+.badge-hi{ background:rgba(255,59,48,.10); border-color:rgba(255,59,48,.18); }
+.badge-mid{ background:rgba(255,149,0,.10); border-color:rgba(255,149,0,.18); }
+.badge-low{ background:rgba(52,199,89,.10); border-color:rgba(52,199,89,.18); }
+
+.k-meta{
+  margin-top:10px;
+  color:#1D1D1F;
+  font-size:.9rem;
+  line-height:1.35;
+}
+.k-meta span{ color:#6E6E73; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,14 +120,14 @@ st.markdown("""
     <div class="logo">🏫</div>
     <div>
       <div class="title">小太陽｜幼兒園管理系統</div>
-      <div class="small">簡約、直觀</div>
+      <div class="small">新生登記</div>
     </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
 # =========================
-# 2) Google Sheet 設定（新增：預計就讀）
+# 2) Google Sheet 設定（含：預計就讀）
 # =========================
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
 WORKSHEET_NAME = "enrollments"
@@ -96,13 +144,13 @@ COLUMNS = [
     "推薦人",
     "備註",
     "重要性",
-    "預計就讀",   # ✅ 新增欄位（確認就讀的人）
+    "預計就讀",
 ]
 
 REPORT_STATUS = ["新登記", "已入學", "候補", "不錄取"]
 CONTACT_STATUS = ["未聯繫", "已聯繫", "已參觀", "無回應"]
 IMPORTANCE = ["高", "中", "低"]
-WILL_ENROLL = ["未確認", "確認就讀"]  # 你要的「確認就讀的人」
+WILL_ENROLL = ["未確認", "確認就讀"]
 
 DEFAULT_ROW = {
     "報名狀態": "新登記",
@@ -185,14 +233,52 @@ def normalize_phone(s: str) -> str:
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
+def parse_date_any(x: str):
+    try:
+        d = pd.to_datetime(str(x), errors="coerce")
+        if pd.isna(d):
+            return None
+        return d.date()
+    except Exception:
+        return None
+
+def calc_age_months(birthday_str: str) -> int | None:
+    b = parse_date_any(birthday_str)
+    if not b:
+        return None
+    today = date.today()
+    days = (today - b).days
+    if days < 0:
+        return None
+    # 月齡近似（以平均月長 30.44 天）
+    return int(days / 30.44)
+
+def age_band_from_months(m: int | None) -> str:
+    if m is None:
+        return "未知"
+    years = m // 12
+    if years >= 6:
+        return "6歲以上"
+    return f"{years}–{years+1}歲"
+
+def importance_badge_class(v: str) -> str:
+    v = (v or "").strip()
+    if v == "高":
+        return "badge badge-hi"
+    if v == "中":
+        return "badge badge-mid"
+    if v == "低":
+        return "badge badge-low"
+    return "badge"
+
+def safe(v):
+    return "" if v is None else str(v).strip()
+
 # =========================
-# 5) 管理系統分頁（你要的：新生登記）
+# 5) 管理系統分頁：新生登記
 # =========================
 tab_enroll, tab_placeholder = st.tabs(["新生登記", "（其他模組）"])
 
-# =========================
-# 新生登記：表單 / 名單
-# =========================
 with tab_enroll:
     t1, t2 = st.tabs(["表單", "名單"])
 
@@ -218,8 +304,6 @@ with tab_enroll:
             enroll_info = st.text_input("預計入學資訊", placeholder="例如：114學年度小班／2026-09")
             referrer = st.text_input("推薦人", placeholder="選填")
             notes = st.text_area("備註", placeholder="選填")
-
-            # ✅ 新增：預計就讀（確認就讀的人）
             will_enroll = st.selectbox("預計就讀", WILL_ENROLL, index=0)
 
             submitted = st.form_submit_button("送出", use_container_width=True)
@@ -257,10 +341,11 @@ with tab_enroll:
                     st.error("寫入失敗")
                     st.code(str(e))
 
-    # ---------- 名單 ----------
+    # ---------- 名單（卡片 + 分年齡段） ----------
     with t2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 名單")
+        st.markdown('<div class="small">依年齡段分區顯示</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         try:
@@ -270,18 +355,99 @@ with tab_enroll:
             st.code(str(e))
             st.stop()
 
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-        st.markdown("### 更新")
         if len(df) == 0:
             st.info("目前沒有資料")
         else:
+            # 計算月齡 / 年齡段
+            tmp = df.copy()
+            tmp["月齡"] = tmp["幼兒生日"].apply(calc_age_months)
+            tmp["年齡段"] = tmp["月齡"].apply(age_band_from_months)
+
+            # 排序：未知最後
+            band_order = ["0–1歲","1–2歲","2–3歲","3–4歲","4–5歲","5–6歲","6歲以上","未知"]
+            tmp["年齡段"] = pd.Categorical(tmp["年齡段"], categories=band_order, ordered=True)
+            tmp = tmp.sort_values(["年齡段", "月齡"], ascending=[True, True]).reset_index(drop=True)
+
+            # 篩選（可選）
+            top = st.columns([1.3, 1.2, 1.2, 1.2])
+            with top[0]:
+                pick_band = st.selectbox("年齡段", ["全部"] + band_order, index=0)
+            with top[1]:
+                pick_report = st.selectbox("報名狀態", ["全部"] + REPORT_STATUS, index=0)
+            with top[2]:
+                pick_contact = st.selectbox("聯繫狀態", ["全部"] + CONTACT_STATUS, index=0)
+            with top[3]:
+                pick_imp = st.selectbox("重要性", ["全部"] + IMPORTANCE, index=0)
+
+            view = tmp.copy()
+            if pick_band != "全部":
+                view = view[view["年齡段"] == pick_band]
+            if pick_report != "全部":
+                view = view[view["報名狀態"] == pick_report]
+            if pick_contact != "全部":
+                view = view[view["聯繫狀態"] == pick_contact]
+            if pick_imp != "全部":
+                view = view[view["重要性"] == pick_imp]
+
+            # 依年齡段分區 + 卡片式
+            for band in band_order:
+                group = view[view["年齡段"] == band]
+                if len(group) == 0:
+                    continue
+
+                with st.expander(f"{band}（{len(group)}）", expanded=True):
+                    cols_per_row = 3
+                    cols = st.columns(cols_per_row)
+                    i = 0
+
+                    for _, r in group.iterrows():
+                        # 年齡顯示
+                        m = r.get("月齡")
+                        if pd.isna(m) or m is None:
+                            age_text = "年齡：—"
+                        else:
+                            y = int(m) // 12
+                            mm = int(m) % 12
+                            age_text = f"年齡：{y}歲{mm}月"
+
+                        imp = safe(r.get("重要性"))
+                        imp_cls = importance_badge_class(imp)
+
+                        html = f"""
+                        <div class="k-card">
+                          <div class="k-title">{safe(r.get("幼兒姓名"))}</div>
+                          <div class="k-sub">{age_text}</div>
+
+                          <div class="k-row">
+                            <span class="badge">{safe(r.get("報名狀態")) or "—"}</span>
+                            <span class="badge">{safe(r.get("聯繫狀態")) or "—"}</span>
+                            <span class="{imp_cls}">重要性：{imp or "—"}</span>
+                            <span class="badge">預計就讀：{safe(r.get("預計就讀")) or "—"}</span>
+                          </div>
+
+                          <div class="k-meta">
+                            <div><span>家長：</span>{safe(r.get("家長稱呼")) or "—"}　<span>電話：</span>{safe(r.get("電話")) or "—"}</div>
+                            <div><span>預計入學：</span>{safe(r.get("預計入學資訊")) or "—"}</div>
+                            <div><span>推薦人：</span>{safe(r.get("推薦人")) or "—"}</div>
+                            <div><span>備註：</span>{safe(r.get("備註")) or "—"}</div>
+                          </div>
+                        </div>
+                        """
+
+                        cols[i % cols_per_row].markdown(html, unsafe_allow_html=True)
+                        i += 1
+
+            st.markdown("---")
+
+            # 更新區塊（維持你原本邏輯：用電話定位更新）
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown("### 更新")
+            st.markdown("</div>", unsafe_allow_html=True)
+
             phone_list = df["電話"].astype(str).tolist()
             target_phone = st.selectbox("選擇電話", phone_list)
 
             row_idx = df.index[df["電話"].astype(str) == str(target_phone)].tolist()[0]
-
             cur_report = df.loc[row_idx, "報名狀態"] or "新登記"
             cur_contact = df.loc[row_idx, "聯繫狀態"] or "未聯繫"
             cur_imp = df.loc[row_idx, "重要性"] or "中"
