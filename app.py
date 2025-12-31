@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import date, datetime
 import re
 import json
+from html import escape as html_escape
 
 # =========================
 # 0) 基本設定
@@ -115,7 +116,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# 2) Sheet 欄位（你最新版本）
+# 2) Sheet 欄位（你目前版本）
 # =========================
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
 WORKSHEET_NAME = "enrollments"
@@ -256,9 +257,6 @@ def age_band_from_months(m):
         return "6歲以上"
     return f"{years}–{years+1}歲"
 
-def safe(v):
-    return "" if v is None else str(v).strip()
-
 def badge_for_importance(v: str) -> str:
     v = (v or "").strip()
     if v == "高":
@@ -269,16 +267,20 @@ def badge_for_importance(v: str) -> str:
         return "badge badge-ok"
     return "badge"
 
-# ✅ B 模式：從「預計入學資訊」抓班別（你還沒加班別欄位也能用）
+# ✅ 關鍵：把資料內容做 HTML 轉義，避免破壞卡片
+def safe_text(v) -> str:
+    s = "" if v is None else str(v)
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    return html_escape(s).replace("\n", "<br>")
+
+# ✅ 從「預計入學資訊」推估班別（你還沒加班別欄位也能分組）
 def guess_class_from_enroll_info(info: str) -> str:
     t = (info or "").strip()
     if not t:
         return "未設定"
-    # 常見關鍵字
     for k in ["幼幼", "小班", "中班", "大班"]:
         if k in t:
             return k
-    # 若寫「幼班/小/中/大」也盡量猜
     if "幼" in t:
         return "幼幼"
     if "小" in t:
@@ -302,6 +304,7 @@ def render_cards(data: pd.DataFrame, title_hint: str = ""):
         group = data[data["年齡段"] == band]
         if len(group) == 0:
             continue
+
         with st.expander(f"{band}（{len(group)}）", expanded=True):
             cols = st.columns(3)
             i = 0
@@ -314,25 +317,26 @@ def render_cards(data: pd.DataFrame, title_hint: str = ""):
                     mm = int(m) % 12
                     age_text = f"年齡：{y}歲{mm}月"
 
-                imp = safe(r.get("重要性"))
+                imp = ("" if r.get("重要性") is None else str(r.get("重要性"))).strip()
+
                 html = f"""
                 <div class="k-card">
-                  <div class="k-title">{safe(r.get("幼兒姓名"))}<span class="idpill">{safe(r.get("編號"))}</span></div>
-                  <div class="k-sub">{age_text}</div>
+                  <div class="k-title">{safe_text(r.get("幼兒姓名"))}<span class="idpill">{safe_text(r.get("編號"))}</span></div>
+                  <div class="k-sub">{safe_text(age_text)}</div>
 
                   <div class="k-row">
-                    <span class="badge">報名：{safe(r.get("報名狀態")) or "—"}</span>
-                    <span class="badge">聯繫：{safe(r.get("聯繫狀態")) or "—"}</span>
-                    <span class="{badge_for_importance(imp)}">重要性：{imp or "—"}</span>
-                    <span class="badge">預計班別：{safe(r.get("預計班別")) or "—"}</span>
+                    <span class="badge">報名：{safe_text(r.get("報名狀態") or "—")}</span>
+                    <span class="badge">聯繫：{safe_text(r.get("聯繫狀態") or "—")}</span>
+                    <span class="{badge_for_importance(imp)}">重要性：{safe_text(imp or "—")}</span>
+                    <span class="badge">預計班別：{safe_text(r.get("預計班別") or "—")}</span>
                   </div>
 
                   <div class="k-meta">
-                    <div><span>家長：</span>{safe(r.get("家長稱呼")) or "—"}　<span>電話：</span>{safe(r.get("電話")) or "—"}</div>
-                    <div><span>登記：</span>{safe(r.get("登記日期")) or "—"}</div>
-                    <div><span>預計入學：</span>{safe(r.get("預計入學資訊")) or "—"}</div>
-                    <div><span>推薦人：</span>{safe(r.get("推薦人")) or "—"}</div>
-                    <div><span>備註：</span>{safe(r.get("備註")) or "—"}</div>
+                    <div><span>家長：</span>{safe_text(r.get("家長稱呼") or "—")}　<span>電話：</span>{safe_text(r.get("電話") or "—")}</div>
+                    <div><span>登記：</span>{safe_text(r.get("登記日期") or "—")}</div>
+                    <div><span>預計入學：</span>{safe_text(r.get("預計入學資訊") or "—")}</div>
+                    <div><span>推薦人：</span>{safe_text(r.get("推薦人") or "—")}</div>
+                    <div><span>備註：</span>{safe_text(r.get("備註") or "—")}</div>
                   </div>
                 </div>
                 """
@@ -374,7 +378,7 @@ with tab_enroll:
             with g:
                 child_bday = st.date_input("幼兒生日 *", value=date(2022, 1, 1))
 
-            enroll_info = st.text_input("預計入學資訊（可寫：115 幼幼/小班/中班/大班）", placeholder="例如：115小班／2026-09")
+            enroll_info = st.text_input("預計入學資訊（可寫：幼幼/小班/中班/大班）", placeholder="例如：115小班／2026-09")
             referrer = st.text_input("推薦人", placeholder="選填")
             notes = st.text_area("備註", placeholder="選填")
 
@@ -420,7 +424,7 @@ with tab_enroll:
     with t_list:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 名單整理")
-        st.markdown('<div class="small">依聯繫狀態 / 依預計就讀班級 分開顯示</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small">已修正：備註/推薦人含特殊字元時，不會再把卡片弄壞</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         try:
@@ -436,8 +440,6 @@ with tab_enroll:
             tmp = df.copy()
             tmp["月齡"] = tmp["幼兒生日"].apply(calc_age_months)
             tmp["年齡段"] = tmp["月齡"].apply(age_band_from_months)
-
-            # ✅ 這裡建立「預計班別」（先用預計入學資訊推估）
             tmp["預計班別"] = tmp["預計入學資訊"].astype(str).apply(guess_class_from_enroll_info)
 
             v1, v2, v3 = st.tabs(["未聯繫", "已聯繫", "依預計就讀班級"])
@@ -447,17 +449,17 @@ with tab_enroll:
                 if len(data) == 0:
                     st.info("目前沒有未聯繫資料")
                 else:
-                    render_cards(data, "只顯示：聯繫狀態＝未聯繫（再依年齡段分區）")
+                    render_cards(data, "聯繫狀態＝未聯繫（再依年齡段分區）")
 
             with v2:
                 data = tmp[tmp["聯繫狀態"].astype(str).fillna("") != "未聯繫"].copy()
                 if len(data) == 0:
                     st.info("目前沒有已聯繫資料")
                 else:
-                    render_cards(data, "只顯示：聯繫狀態≠未聯繫（再依年齡段分區）")
+                    render_cards(data, "聯繫狀態≠未聯繫（再依年齡段分區）")
 
             with v3:
-                st.caption("依『預計入學資訊』文字推估：幼幼 / 小班 / 中班 / 大班（你之後加正式欄位，我再改成 100% 準確）")
+                st.caption("依『預計入學資訊』推估分班（幼幼/小班/中班/大班）。之後你加正式欄位，我再改成 100% 準確。")
                 class_order = ["幼幼", "小班", "中班", "大班", "未設定"]
                 for lv in class_order:
                     g = tmp[tmp["預計班別"] == lv].copy()
@@ -465,7 +467,6 @@ with tab_enroll:
                         if len(g) == 0:
                             st.caption("目前沒有")
                         else:
-                            # 這裡就直接卡片排，不再分年齡段也行；但你要更清楚，我保留年齡段分區
                             render_cards(g)
 
             st.markdown("---")
