@@ -127,13 +127,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# 2) Google Sheet 設定（含：預計就讀）
+# 2) Google Sheet 設定（依你最新欄位）
+#    注意：Excel 你貼了「預計就讀」兩次，我這裡會只保留一個並強制同步表頭
 # =========================
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
 WORKSHEET_NAME = "enrollments"
 
 COLUMNS = [
-    "報名狀態",
+    "編號",
     "聯繫狀態",
     "登記日期",
     "幼兒姓名",
@@ -147,16 +148,14 @@ COLUMNS = [
     "預計就讀",
 ]
 
-REPORT_STATUS = ["新登記", "已入學", "候補", "不錄取"]
 CONTACT_STATUS = ["未聯繫", "已聯繫", "已參觀", "無回應"]
 IMPORTANCE = ["高", "中", "低"]
 WILL_ENROLL = ["未確認", "確認就讀"]
 
 DEFAULT_ROW = {
-    "報名狀態": "新登記",
     "聯繫狀態": "未聯繫",
     "重要性": "中",
-    "預計就讀": "未確認"
+    "預計就讀": "未確認",
 }
 
 # =========================
@@ -192,6 +191,7 @@ def get_sheet_header(ws) -> list:
     return values[0]
 
 def ensure_header_exact(ws):
+    # 直接覆蓋第一列，避免你現在那種「預計就讀」重複造成讀寫混亂
     header = get_sheet_header(ws)
     if header != COLUMNS:
         ws.update("A1", [COLUMNS])
@@ -211,7 +211,12 @@ def read_df() -> pd.DataFrame:
     for c in COLUMNS:
         if c not in df.columns:
             df[c] = ""
-    return df[COLUMNS].copy()
+    df = df[COLUMNS].copy()
+
+    # 去掉整列空白
+    df = df[~(df.fillna("").astype(str).apply(lambda r: "".join(r.values).strip() == "", axis=1))].copy()
+    df.reset_index(drop=True, inplace=True)
+    return df
 
 def append_row(row: dict):
     ws = open_ws()
@@ -233,6 +238,12 @@ def normalize_phone(s: str) -> str:
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
+def gen_id(phone_clean: str) -> str:
+    # 16位左右：時間戳 + 電話末4（穩定好用，不怕重複）
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    last4 = (phone_clean[-4:] if phone_clean else "0000")
+    return f"EN{ts}{last4}"
+
 def parse_date_any(x: str):
     try:
         d = pd.to_datetime(str(x), errors="coerce")
@@ -242,7 +253,7 @@ def parse_date_any(x: str):
     except Exception:
         return None
 
-def calc_age_months(birthday_str: str) -> int | None:
+def calc_age_months(birthday_str: str):
     b = parse_date_any(birthday_str)
     if not b:
         return None
@@ -250,10 +261,9 @@ def calc_age_months(birthday_str: str) -> int | None:
     days = (today - b).days
     if days < 0:
         return None
-    # 月齡近似（以平均月長 30.44 天）
     return int(days / 30.44)
 
-def age_band_from_months(m: int | None) -> str:
+def age_band_from_months(m):
     if m is None:
         return "未知"
     years = m // 12
@@ -324,6 +334,8 @@ with tab_enroll:
                 row = {c: "" for c in COLUMNS}
                 row.update(DEFAULT_ROW)
 
+                row["編號"] = gen_id(phone_clean)
+                row["聯繫狀態"] = "未聯繫"
                 row["登記日期"] = now_str()
                 row["幼兒姓名"] = child_name.strip()
                 row["家長稱呼"] = parent_title.strip()
@@ -358,38 +370,48 @@ with tab_enroll:
         if len(df) == 0:
             st.info("目前沒有資料")
         else:
-            # 計算月齡 / 年齡段
             tmp = df.copy()
             tmp["月齡"] = tmp["幼兒生日"].apply(calc_age_months)
             tmp["年齡段"] = tmp["月齡"].apply(age_band_from_months)
 
-            # 排序：未知最後
             band_order = ["0–1歲","1–2歲","2–3歲","3–4歲","4–5歲","5–6歲","6歲以上","未知"]
             tmp["年齡段"] = pd.Categorical(tmp["年齡段"], categories=band_order, ordered=True)
             tmp = tmp.sort_values(["年齡段", "月齡"], ascending=[True, True]).reset_index(drop=True)
 
             # 篩選（可選）
-            top = st.columns([1.3, 1.2, 1.2, 1.2])
+            top = st.columns([1.3, 1.2, 1.2, 1.2, 1.3])
             with top[0]:
                 pick_band = st.selectbox("年齡段", ["全部"] + band_order, index=0)
             with top[1]:
-                pick_report = st.selectbox("報名狀態", ["全部"] + REPORT_STATUS, index=0)
-            with top[2]:
                 pick_contact = st.selectbox("聯繫狀態", ["全部"] + CONTACT_STATUS, index=0)
-            with top[3]:
+            with top[2]:
                 pick_imp = st.selectbox("重要性", ["全部"] + IMPORTANCE, index=0)
+            with top[3]:
+                pick_will = st.selectbox("預計就讀", ["全部"] + WILL_ENROLL, index=0)
+            with top[4]:
+                kw = st.text_input("關鍵字", placeholder="幼兒/家長/電話/備註")
 
             view = tmp.copy()
             if pick_band != "全部":
                 view = view[view["年齡段"] == pick_band]
-            if pick_report != "全部":
-                view = view[view["報名狀態"] == pick_report]
             if pick_contact != "全部":
                 view = view[view["聯繫狀態"] == pick_contact]
             if pick_imp != "全部":
                 view = view[view["重要性"] == pick_imp]
+            if pick_will != "全部":
+                view = view[view["預計就讀"] == pick_will]
+            if kw.strip():
+                k = kw.strip()
+                view = view[
+                    view["幼兒姓名"].astype(str).str.contains(k, na=False) |
+                    view["家長稱呼"].astype(str).str.contains(k, na=False) |
+                    view["電話"].astype(str).str.contains(k, na=False) |
+                    view["備註"].astype(str).str.contains(k, na=False) |
+                    view["推薦人"].astype(str).str.contains(k, na=False) |
+                    view["預計入學資訊"].astype(str).str.contains(k, na=False) |
+                    view["編號"].astype(str).str.contains(k, na=False)
+                ]
 
-            # 依年齡段分區 + 卡片式
             for band in band_order:
                 group = view[view["年齡段"] == band]
                 if len(group) == 0:
@@ -401,7 +423,6 @@ with tab_enroll:
                     i = 0
 
                     for _, r in group.iterrows():
-                        # 年齡顯示
                         m = r.get("月齡")
                         if pd.isna(m) or m is None:
                             age_text = "年齡：—"
@@ -415,11 +436,10 @@ with tab_enroll:
 
                         html = f"""
                         <div class="k-card">
-                          <div class="k-title">{safe(r.get("幼兒姓名"))}</div>
+                          <div class="k-title">{safe(r.get("幼兒姓名"))} <span class="badge">{safe(r.get("編號"))}</span></div>
                           <div class="k-sub">{age_text}</div>
 
                           <div class="k-row">
-                            <span class="badge">{safe(r.get("報名狀態")) or "—"}</span>
                             <span class="badge">{safe(r.get("聯繫狀態")) or "—"}</span>
                             <span class="{imp_cls}">重要性：{imp or "—"}</span>
                             <span class="badge">預計就讀：{safe(r.get("預計就讀")) or "—"}</span>
@@ -439,37 +459,32 @@ with tab_enroll:
 
             st.markdown("---")
 
-            # 更新區塊（維持你原本邏輯：用電話定位更新）
+            # 更新（改用「編號」定位，最穩）
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 更新")
             st.markdown("</div>", unsafe_allow_html=True)
 
-            phone_list = df["電話"].astype(str).tolist()
-            target_phone = st.selectbox("選擇電話", phone_list)
+            id_list = df["編號"].astype(str).tolist()
+            target_id = st.selectbox("選擇編號", id_list)
 
-            row_idx = df.index[df["電話"].astype(str) == str(target_phone)].tolist()[0]
-            cur_report = df.loc[row_idx, "報名狀態"] or "新登記"
+            row_idx = df.index[df["編號"].astype(str) == str(target_id)].tolist()[0]
             cur_contact = df.loc[row_idx, "聯繫狀態"] or "未聯繫"
             cur_imp = df.loc[row_idx, "重要性"] or "中"
             cur_will = df.loc[row_idx, "預計就讀"] or "未確認"
 
-            a, b, c, d = st.columns(4)
+            a, b, c = st.columns(3)
             with a:
-                new_report = st.selectbox("報名狀態", REPORT_STATUS,
-                                          index=REPORT_STATUS.index(cur_report) if cur_report in REPORT_STATUS else 0)
-            with b:
                 new_contact = st.selectbox("聯繫狀態", CONTACT_STATUS,
                                            index=CONTACT_STATUS.index(cur_contact) if cur_contact in CONTACT_STATUS else 0)
-            with c:
+            with b:
                 new_imp = st.selectbox("重要性", IMPORTANCE,
                                        index=IMPORTANCE.index(cur_imp) if cur_imp in IMPORTANCE else 1)
-            with d:
+            with c:
                 new_will = st.selectbox("預計就讀", WILL_ENROLL,
                                         index=WILL_ENROLL.index(cur_will) if cur_will in WILL_ENROLL else 0)
 
             if st.button("儲存", use_container_width=True):
                 try:
-                    update_cell_by_row_index(row_idx, "報名狀態", new_report)
                     update_cell_by_row_index(row_idx, "聯繫狀態", new_contact)
                     update_cell_by_row_index(row_idx, "重要性", new_imp)
                     update_cell_by_row_index(row_idx, "預計就讀", new_will)
