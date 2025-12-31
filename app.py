@@ -62,6 +62,7 @@ st.markdown("""
   border:1px solid var(--line);
 }
 .stButton>button:hover{ opacity:.92; }
+
 div[data-testid="stTextInput"] input,
 div[data-testid="stTextArea"] textarea,
 div[data-testid="stDateInput"] input,
@@ -134,28 +135,29 @@ div[data-testid="stSelectbox"] > div{ border-radius:14px !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<div class="topbar">
-  <div class="brand">
-    <div class="logo">🏫</div>
-    <div>
-      <div class="title">小太陽｜幼兒園管理系統</div>
-      <div class="small">新生登記</div>
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    '<div class="topbar">'
+    '  <div class="brand">'
+    '    <div class="logo">🏫</div>'
+    '    <div>'
+    '      <div class="title">小太陽｜幼兒園管理系統</div>'
+    '      <div class="small">新生登記</div>'
+    '    </div>'
+    '  </div>'
+    '</div>',
+    unsafe_allow_html=True
+)
 
 # =========================
-# 2) 你的 Sheet 位置
+# 2) 你的 Sheet 位置（請確認你看的也是 enrollments 分頁）
 # =========================
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
-WORKSHEET_NAME = "enrollments"
+WORKSHEET_NAME = "enrollments"  # ✅ 你 App 寫入的就是這個分頁
 
-# Excel 可以多欄/少欄，但這些欄位建議存在
+# ✅ 你目前要的欄位
 NEEDED_COLS = [
-    "報名狀態", "聯繫狀態", "登記日期", "幼兒姓名", "家長稱呼", "電話", "幼兒生日",
-    "預計入學資訊", "推薦人", "備註", "重要性"
+    "報名狀態", "聯繫狀態", "登記日期", "幼兒姓名", "家長稱呼", "電話",
+    "幼兒生日", "預計入學資訊", "推薦人", "備註", "重要性"
 ]
 
 REPORT_STATUS = ["新登記", "候補", "已入學", "不錄取"]
@@ -189,11 +191,6 @@ def open_ws():
     return sh.worksheet(WORKSHEET_NAME)
 
 def _clean_header(header: list) -> list:
-    """
-    1) 去前後空白
-    2) 空欄給「未命名欄位」
-    3) 重複欄位自動變成 名稱(2)、名稱(3) 避免讀取對錯
-    """
     header = [("" if h is None else str(h)).strip() for h in header]
     seen = {}
     fixed = []
@@ -215,7 +212,6 @@ def get_sheet_header(ws) -> list:
     return _clean_header(values[0])
 
 def _norm_colname(s: str) -> str:
-    # 用於對應欄位：去空白、全形空白、大小寫
     if s is None:
         return ""
     s = str(s).replace("\u3000", " ").strip()
@@ -223,11 +219,6 @@ def _norm_colname(s: str) -> str:
     return s
 
 def _build_needed_to_actual_map(clean_header: list) -> dict:
-    """
-    把 NEEDED_COLS（我們想要的欄位）對應到 Excel 真正欄位名（可能有(2)）
-    盡量選第一個匹配到的欄位。
-    """
-    # clean_header 是已經處理過重複的 header
     norm_to_actuals = {}
     for h in clean_header:
         base = h.split("(")[0] if "(" in h else h
@@ -238,7 +229,7 @@ def _build_needed_to_actual_map(clean_header: list) -> dict:
     for need in NEEDED_COLS:
         key = _norm_colname(need)
         if key in norm_to_actuals and len(norm_to_actuals[key]) > 0:
-            m[need] = norm_to_actuals[key][0]  # 選第一個同名欄
+            m[need] = norm_to_actuals[key][0]
         else:
             m[need] = None
     return m
@@ -249,11 +240,9 @@ def read_df() -> pd.DataFrame:
     if not values:
         return pd.DataFrame(columns=NEEDED_COLS)
 
-    raw_header = values[0]
-    clean_header = _clean_header(raw_header)
+    clean_header = _clean_header(values[0])
     rows = values[1:]
 
-    # 對齊每列長度（避免某些列少欄/多欄導致錯位）
     n = len(clean_header)
     fixed_rows = []
     for r in rows:
@@ -265,11 +254,8 @@ def read_df() -> pd.DataFrame:
         fixed_rows.append(r)
 
     df_raw = pd.DataFrame(fixed_rows, columns=clean_header)
-
-    # 建立「我們需要欄位」->「Excel實際欄位」對應
     col_map = _build_needed_to_actual_map(clean_header)
 
-    # 產出我們要用的 df（以 NEEDED_COLS 順序）
     df = pd.DataFrame()
     for need in NEEDED_COLS:
         actual = col_map.get(need)
@@ -278,26 +264,20 @@ def read_df() -> pd.DataFrame:
         else:
             df[need] = ""
 
-    # 去除空白列
     df = df.fillna("")
     df = df[~(df.apply(lambda r: "".join([str(x).strip() for x in r.values]).strip() == "", axis=1))].copy()
     df.reset_index(drop=True, inplace=True)
     return df
 
 def append_row(row: dict):
-    """
-    ✅ 寫入時依照 Excel 目前 header 的欄位順序寫入（不覆蓋 header）
-    ✅ header 若有重複欄名（我們會變成 xxx(2)），寫入用 base 名稱取值
-    """
     ws = open_ws()
     raw_values = ws.get_all_values()
 
     if not raw_values:
-        # 沒標題就寫 needed
         ws.update("A1", [NEEDED_COLS])
         header = NEEDED_COLS
     else:
-        header = get_sheet_header(ws)  # 這裡是 clean header（含(2)）
+        header = get_sheet_header(ws)
 
     out = []
     for col in header:
@@ -307,9 +287,6 @@ def append_row(row: dict):
     ws.append_row(out, value_input_option="USER_ENTERED")
 
 def update_cell_by_row_index(row_index_in_df: int, col_name: str, value: str):
-    """
-    用 df 的 row index 去更新 Excel 的指定欄位（依欄名對應到 Excel 實際欄）
-    """
     ws = open_ws()
     values = ws.get_all_values()
     if not values:
@@ -375,16 +352,17 @@ def safe_text(v) -> str:
     s = "" if v is None else str(v)
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     s = html_escape(s)
-    s = s.replace("`", "&#96;")
+    # 避免任何 markdown code block 干擾
+    s = s.replace("`", "")
     return s.replace("\n", "<br>")
 
 def plain(v) -> str:
     return "" if v is None else str(v).strip()
 
 def make_admin_key(row: pd.Series) -> str:
-    # 讓後台選擇不容易撞名（姓名+電話+登記日期）
     return f"{plain(row.get('幼兒姓名'))}｜{plain(row.get('電話'))}｜{plain(row.get('登記日期'))}"
 
+# ✅ 這裡是本次重點：HTML 完全不縮排、不先換行（避免被當 code block）
 def render_cards_aligned(data: pd.DataFrame):
     st.markdown('<div class="k-grid">', unsafe_allow_html=True)
 
@@ -398,34 +376,32 @@ def render_cards_aligned(data: pd.DataFrame):
 
         imp = plain(r.get("重要性"))
 
-        html = f"""
-        <div class="k-card">
-          <div>
-            <div class="k-title">{safe_text(r.get("幼兒姓名") or "—")}</div>
-            <div class="k-sub">{safe_text(age_text)}</div>
-
-            <div class="k-row">
-              <span class="badge">報名：{safe_text(r.get("報名狀態") or "—")}</span>
-              <span class="badge">聯繫：{safe_text(r.get("聯繫狀態") or "—")}</span>
-              <span class="{badge_for_importance(imp)}">重要性：{safe_text(imp or "—")}</span>
-            </div>
-          </div>
-
-          <div class="k-meta">
-            <div class="ellipsis"><span>家長：</span>{safe_text(r.get("家長稱呼") or "—")}　<span>電話：</span>{safe_text(r.get("電話") or "—")}</div>
-            <div class="ellipsis"><span>登記：</span>{safe_text(r.get("登記日期") or "—")}</div>
-            <div class="ellipsis2"><span>推薦人：</span>{safe_text(r.get("推薦人") or "—")}</div>
-            <div class="ellipsis2"><span>備註：</span>{safe_text(r.get("備註") or "—")}</div>
-          </div>
-        </div>
-        """
+        html = (
+            f'<div class="k-card">'
+            f'  <div>'
+            f'    <div class="k-title">{safe_text(r.get("幼兒姓名") or "—")}</div>'
+            f'    <div class="k-sub">{safe_text(age_text)}</div>'
+            f'    <div class="k-row">'
+            f'      <span class="badge">報名：{safe_text(r.get("報名狀態") or "—")}</span>'
+            f'      <span class="badge">聯繫：{safe_text(r.get("聯繫狀態") or "—")}</span>'
+            f'      <span class="{badge_for_importance(imp)}">重要性：{safe_text(imp or "—")}</span>'
+            f'    </div>'
+            f'  </div>'
+            f'  <div class="k-meta">'
+            f'    <div class="ellipsis"><span>家長：</span>{safe_text(r.get("家長稱呼") or "—")}　<span>電話：</span>{safe_text(r.get("電話") or "—")}</div>'
+            f'    <div class="ellipsis"><span>登記：</span>{safe_text(r.get("登記日期") or "—")}</div>'
+            f'    <div class="ellipsis2"><span>推薦人：</span>{safe_text(r.get("推薦人") or "—")}</div>'
+            f'    <div class="ellipsis2"><span>備註：</span>{safe_text(r.get("備註") or "—")}</div>'
+            f'  </div>'
+            f'</div>'
+        )
         st.markdown(html, unsafe_allow_html=True)
 
         with st.expander(f"查看詳細：{plain(r.get('幼兒姓名'))}（{plain(r.get('電話'))}）", expanded=False):
             for col in NEEDED_COLS:
                 st.markdown(f"- **{col}**：{plain(r.get(col)) or '—'}")
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
 # 5) 分頁
@@ -461,9 +437,9 @@ with tab_enroll:
             with g:
                 child_bday = st.date_input("幼兒生日 *", value=date(2022, 1, 1))
 
-            enroll_info = st.text_input("預計入學資訊", placeholder="例如：115小班／2026-09（可留空）")
-            referrer = st.text_input("推薦人", placeholder="選填")
-            notes = st.text_area("備註", placeholder="選填")
+            enroll_info = st.text_input("預計入學資訊（可留空）", placeholder="例如：115小班／2026-09")
+            referrer = st.text_input("推薦人（選填）", placeholder="選填")
+            notes = st.text_area("備註（選填）", placeholder="選填")
 
             submitted = st.form_submit_button("送出", use_container_width=True)
 
@@ -480,7 +456,6 @@ with tab_enroll:
             if errors:
                 st.error("請修正：\n- " + "\n- ".join(errors))
             else:
-                # ✅ 防重複（用電話）
                 try:
                     df_exist = read_df()
                     exists = (df_exist["電話"].astype(str).apply(normalize_phone) == phone_clean).any() if len(df_exist) else False
@@ -515,7 +490,7 @@ with tab_enroll:
     with t_list:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 名單（卡片對齊）")
-        st.markdown('<div class="small">✅ 已防止欄位空白/重複造成「備註跑到重要性」</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small">上方用兩個大按鈕快速切換：未聯繫 / 已聯繫</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         try:
@@ -571,7 +546,7 @@ with tab_enroll:
             st.markdown("---")
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 後台狀態管理（更新報名/聯繫/重要性）")
-            st.markdown('<div class="small">定位方式：姓名｜電話｜登記日期（因為 Excel 沒有編號）</div>', unsafe_allow_html=True)
+            st.markdown('<div class="small">定位方式：姓名｜電話｜登記日期（因為目前沒用編號欄）</div>', unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
             df_admin = df.copy()
@@ -610,5 +585,5 @@ with tab_enroll:
 with tab_other:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 其他模組")
-    st.markdown('<div class="small">之後你要加：在園生名單、收費、出缺勤、班級管理…都放這裡。</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small">之後你要加：確認就讀名單、在園生名單、收費、出缺勤、班級管理…都放這裡。</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
