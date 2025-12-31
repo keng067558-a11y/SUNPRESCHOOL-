@@ -152,10 +152,10 @@ st.markdown("""
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
 WORKSHEET_NAME = "enrollments"
 
-# 你這個版本固定會用到的欄位（Excel 可以多欄/少欄，但這些最好要有）
+# Excel 可以多欄/少欄，但這些欄位建議存在
 NEEDED_COLS = [
-    "報名狀態","聯繫狀態","登記日期","幼兒姓名","家長稱呼","電話","幼兒生日",
-    "預計入學資訊","推薦人","備註","重要性"
+    "報名狀態", "聯繫狀態", "登記日期", "幼兒姓名", "家長稱呼", "電話", "幼兒生日",
+    "預計入學資訊", "推薦人", "備註", "重要性"
 ]
 
 REPORT_STATUS = ["新登記", "候補", "已入學", "不錄取"]
@@ -188,11 +188,60 @@ def open_ws():
     sh = gc.open_by_url(SPREADSHEET_URL)
     return sh.worksheet(WORKSHEET_NAME)
 
+def _clean_header(header: list) -> list:
+    """
+    1) 去前後空白
+    2) 空欄給「未命名欄位」
+    3) 重複欄位自動變成 名稱(2)、名稱(3) 避免讀取對錯
+    """
+    header = [("" if h is None else str(h)).strip() for h in header]
+    seen = {}
+    fixed = []
+    for h in header:
+        if h == "":
+            h = "未命名欄位"
+        if h not in seen:
+            seen[h] = 1
+            fixed.append(h)
+        else:
+            seen[h] += 1
+            fixed.append(f"{h}({seen[h]})")
+    return fixed
+
 def get_sheet_header(ws) -> list:
     values = ws.get_all_values()
     if not values:
         return []
-    return values[0]
+    return _clean_header(values[0])
+
+def _norm_colname(s: str) -> str:
+    # 用於對應欄位：去空白、全形空白、大小寫
+    if s is None:
+        return ""
+    s = str(s).replace("\u3000", " ").strip()
+    s = re.sub(r"\s+", "", s)
+    return s
+
+def _build_needed_to_actual_map(clean_header: list) -> dict:
+    """
+    把 NEEDED_COLS（我們想要的欄位）對應到 Excel 真正欄位名（可能有(2)）
+    盡量選第一個匹配到的欄位。
+    """
+    # clean_header 是已經處理過重複的 header
+    norm_to_actuals = {}
+    for h in clean_header:
+        base = h.split("(")[0] if "(" in h else h
+        key = _norm_colname(base)
+        norm_to_actuals.setdefault(key, []).append(h)
+
+    m = {}
+    for need in NEEDED_COLS:
+        key = _norm_colname(need)
+        if key in norm_to_actuals and len(norm_to_actuals[key]) > 0:
+            m[need] = norm_to_actuals[key][0]  # 選第一個同名欄
+        else:
+            m[need] = None
+    return m
 
 def read_df() -> pd.DataFrame:
     ws = open_ws()
@@ -200,44 +249,80 @@ def read_df() -> pd.DataFrame:
     if not values:
         return pd.DataFrame(columns=NEEDED_COLS)
 
-    header = values[0]
+    raw_header = values[0]
+    clean_header = _clean_header(raw_header)
     rows = values[1:]
-    df = pd.DataFrame(rows, columns=header)
 
-    # ✅ Excel 沒有的欄位就補空欄（不改 Excel）
-    for c in NEEDED_COLS:
-        if c not in df.columns:
-            df[c] = ""
+    # 對齊每列長度（避免某些列少欄/多欄導致錯位）
+    n = len(clean_header)
+    fixed_rows = []
+    for r in rows:
+        r = list(r)
+        if len(r) < n:
+            r = r + [""] * (n - len(r))
+        elif len(r) > n:
+            r = r[:n]
+        fixed_rows.append(r)
 
-    # ✅ 只取需要欄位（你想顯示/使用的）
-    df = df[NEEDED_COLS].copy()
+    df_raw = pd.DataFrame(fixed_rows, columns=clean_header)
+
+    # 建立「我們需要欄位」->「Excel實際欄位」對應
+    col_map = _build_needed_to_actual_map(clean_header)
+
+    # 產出我們要用的 df（以 NEEDED_COLS 順序）
+    df = pd.DataFrame()
+    for need in NEEDED_COLS:
+        actual = col_map.get(need)
+        if actual and actual in df_raw.columns:
+            df[need] = df_raw[actual].astype(str)
+        else:
+            df[need] = ""
 
     # 去除空白列
-    df = df[~(df.fillna("").astype(str).apply(lambda r: "".join(r.values).strip() == "", axis=1))].copy()
+    df = df.fillna("")
+    df = df[~(df.apply(lambda r: "".join([str(x).strip() for x in r.values]).strip() == "", axis=1))].copy()
     df.reset_index(drop=True, inplace=True)
     return df
 
 def append_row(row: dict):
+    """
+    ✅ 寫入時依照 Excel 目前 header 的欄位順序寫入（不覆蓋 header）
+    ✅ header 若有重複欄名（我們會變成 xxx(2)），寫入用 base 名稱取值
+    """
     ws = open_ws()
-    header = get_sheet_header(ws)
-    if not header:
-        # 如果 Excel 完全沒標題，就幫它寫一個「以你 Excel 當下想要的欄位」(至少要 needed)
+    raw_values = ws.get_all_values()
+
+    if not raw_values:
+        # 沒標題就寫 needed
         ws.update("A1", [NEEDED_COLS])
         header = NEEDED_COLS
+    else:
+        header = get_sheet_header(ws)  # 這裡是 clean header（含(2)）
 
-    # ✅ 寫入時「依照 Excel 目前 header 欄位順序」去寫，不會覆蓋 header
     out = []
     for col in header:
-        out.append(row.get(col, ""))  # Excel 有的欄位就寫，沒有就空白
+        base = col.split("(")[0] if "(" in col else col
+        out.append(row.get(base, ""))
+
     ws.append_row(out, value_input_option="USER_ENTERED")
 
 def update_cell_by_row_index(row_index_in_df: int, col_name: str, value: str):
+    """
+    用 df 的 row index 去更新 Excel 的指定欄位（依欄名對應到 Excel 實際欄）
+    """
     ws = open_ws()
-    header = get_sheet_header(ws)
-    if col_name not in header:
-        raise RuntimeError(f"Excel 沒有這個欄位：{col_name}（請先在第一列加入欄位名稱）")
+    values = ws.get_all_values()
+    if not values:
+        raise RuntimeError("Excel 目前是空的，沒有標題列可以更新")
 
-    col_idx = header.index(col_name) + 1
+    clean_header = _clean_header(values[0])
+    col_map = _build_needed_to_actual_map(clean_header)
+    actual = col_map.get(col_name)
+
+    if not actual:
+        raise RuntimeError(f"Excel 第一列找不到欄位：{col_name}（請確認欄位名稱是否一致/有空白/重複）")
+
+    col_idx = clean_header.index(actual) + 1
     ws.update_cell(row_index_in_df + 2, col_idx, value)
 
 # =========================
@@ -269,9 +354,9 @@ def calc_age_months(birthday_str: str):
     return int(days / 30.44)
 
 def age_band_from_months(m):
-    if m is None:
+    if m is None or pd.isna(m):
         return "未知"
-    years = m // 12
+    years = int(m) // 12
     if years >= 6:
         return "6歲以上"
     return f"{years}–{years+1}歲"
@@ -297,6 +382,7 @@ def plain(v) -> str:
     return "" if v is None else str(v).strip()
 
 def make_admin_key(row: pd.Series) -> str:
+    # 讓後台選擇不容易撞名（姓名+電話+登記日期）
     return f"{plain(row.get('幼兒姓名'))}｜{plain(row.get('電話'))}｜{plain(row.get('登記日期'))}"
 
 def render_cards_aligned(data: pd.DataFrame):
@@ -304,7 +390,12 @@ def render_cards_aligned(data: pd.DataFrame):
 
     for _, r in data.iterrows():
         m = r.get("月齡")
-        age_text = "年齡：—" if pd.isna(m) or m is None else f"年齡：{int(m)//12}歲{int(m)%12}月"
+        if m is None or pd.isna(m):
+            age_text = "年齡：—"
+        else:
+            m = int(m)
+            age_text = f"年齡：{m//12}歲{m%12}月"
+
         imp = plain(r.get("重要性"))
 
         html = f"""
@@ -424,7 +515,7 @@ with tab_enroll:
     with t_list:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 名單（卡片對齊）")
-        st.markdown('<div class="small">Excel 欄位不會再被 APP 改回去</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small">✅ 已防止欄位空白/重複造成「備註跑到重要性」</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         try:
