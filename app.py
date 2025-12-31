@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # =========================
-# 1) Apple 風格 UI
+# 1) Apple 風格 UI + 對齊卡片 CSS（重點在這裡）
 # =========================
 st.markdown("""
 <style>
@@ -67,20 +67,6 @@ div[data-testid="stTextArea"] textarea,
 div[data-testid="stDateInput"] input,
 div[data-testid="stSelectbox"] > div{ border-radius:14px !important; }
 
-.k-card{
-  background:#fff;
-  border:1px solid rgba(0,0,0,0.06);
-  border-radius:18px;
-  box-shadow:0 10px 26px rgba(0,0,0,0.06);
-  padding:14px 14px 12px 14px;
-  margin-bottom:12px;
-}
-.k-title{
-  font-size:1.05rem; font-weight:900; letter-spacing:-0.01em; margin:0; color:#1D1D1F;
-}
-.k-sub{ margin-top:4px; color:#6E6E73; font-size:.9rem; }
-.k-row{ margin-top:10px; display:flex; flex-wrap:wrap; gap:6px; }
-
 .badge{
   display:inline-block;
   padding:4px 10px;
@@ -95,9 +81,6 @@ div[data-testid="stSelectbox"] > div{ border-radius:14px !important; }
 .badge-danger{ background:rgba(255,59,48,.12); border-color:rgba(255,59,48,.22); }
 .badge-blue{ background:rgba(0,122,255,.12); border-color:rgba(0,122,255,.22); }
 
-.k-meta{ margin-top:10px; color:#1D1D1F; font-size:.9rem; line-height:1.35; }
-.k-meta span{ color:#6E6E73; }
-
 .idpill{
   display:inline-block; margin-left:8px;
   padding:3px 10px; border-radius:999px;
@@ -105,10 +88,65 @@ div[data-testid="stSelectbox"] > div{ border-radius:14px !important; }
   background:rgba(0,0,0,.03); color:#1D1D1F;
 }
 
-/* 大按鈕區 */
-.bigbtn-wrap{
-  display:flex; gap:12px; margin:8px 0 14px 0;
+/* ✅ 卡片對齊核心：用 grid + 固定高度 + 長內容省略 */
+.k-grid{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:12px;
+  align-items:stretch;
 }
+@media (max-width: 1024px){
+  .k-grid{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px){
+  .k-grid{ grid-template-columns:repeat(1, minmax(0, 1fr)); }
+}
+
+.k-card{
+  background:#fff;
+  border:1px solid rgba(0,0,0,0.06);
+  border-radius:18px;
+  box-shadow:0 10px 26px rgba(0,0,0,0.06);
+  padding:14px 14px 12px 14px;
+  height: 245px;            /* ✅ 固定卡片高度（你要更高/更低可改） */
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+.k-head{ flex:0 0 auto; }
+.k-title{
+  font-size:1.05rem; font-weight:900; letter-spacing:-0.01em; margin:0; color:#1D1D1F;
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.k-sub{ margin-top:4px; color:#6E6E73; font-size:.9rem; }
+
+.k-row{ margin-top:10px; display:flex; flex-wrap:wrap; gap:6px; }
+
+.k-meta{
+  margin-top:10px;
+  font-size:.9rem;
+  line-height:1.35;
+  color:#1D1D1F;
+  flex:1 1 auto;
+  overflow:hidden;
+}
+.k-meta span{ color:#6E6E73; }
+
+/* ✅ 長文字省略號：只顯示一行，太長就 ... */
+.ellipsis{
+  display:block;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.ellipsis2{
+  display:-webkit-box;
+  -webkit-line-clamp:2;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+}
+
+/* 大按鈕區 */
 .bigbtn-hint{ color:var(--muted); font-size:.92rem; margin-top:-4px; }
 </style>
 """, unsafe_allow_html=True)
@@ -126,7 +164,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# 2) Sheet 欄位（新增：確認就讀年度/班級）
+# 2) Sheet 欄位
 # =========================
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
 WORKSHEET_NAME = "enrollments"
@@ -144,8 +182,8 @@ COLUMNS = [
     "推薦人",
     "備註",
     "重要性",
-    "確認就讀年度",   # ✅ 新增
-    "確認就讀班級",   # ✅ 新增
+    "確認就讀年度",
+    "確認就讀班級",
 ]
 
 REPORT_STATUS = ["新登記", "已入學", "候補", "不錄取"]
@@ -281,13 +319,15 @@ def badge_for_importance(v: str) -> str:
         return "badge badge-ok"
     return "badge"
 
-# ✅ 防 Markdown code block：把 ` 也轉掉
 def safe_text(v) -> str:
     s = "" if v is None else str(v)
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     s = html_escape(s)
     s = s.replace("`", "&#96;")
     return s.replace("\n", "<br>")
+
+def plain(v) -> str:
+    return "" if v is None else str(v).strip()
 
 def guess_class_from_enroll_info(info: str) -> str:
     t = (info or "").strip()
@@ -296,80 +336,81 @@ def guess_class_from_enroll_info(info: str) -> str:
     for k in ["幼幼", "小班", "中班", "大班"]:
         if k in t:
             return k
-    if "幼" in t:
-        return "幼幼"
-    if "小" in t:
-        return "小班"
-    if "中" in t:
-        return "中班"
-    if "大" in t:
-        return "大班"
     return "未設定"
 
 def is_confirmed_115(row: pd.Series) -> bool:
-    y = (row.get("確認就讀年度") or "").strip()
-    c = (row.get("確認就讀班級") or "").strip()
+    y = plain(row.get("確認就讀年度"))
+    c = plain(row.get("確認就讀班級"))
     return (y == "115") and (c in CONFIRM_CLASS_OPTIONS)
 
-def render_cards(data: pd.DataFrame, title_hint: str = ""):
-    band_order = ["0–1歲","1–2歲","2–3歲","3–4歲","4–5歲","5–6歲","6歲以上","未知"]
-    data = data.copy()
-    data["年齡段"] = pd.Categorical(data["年齡段"], categories=band_order, ordered=True)
-    data = data.sort_values(["年齡段", "月齡"], ascending=[True, True]).reset_index(drop=True)
+# ✅ 對齊版卡片渲染：grid + 固定高度 + 長內容省略 + 詳細點開看
+def render_cards_aligned(data: pd.DataFrame):
+    # grid 開頭
+    st.markdown('<div class="k-grid">', unsafe_allow_html=True)
 
-    if title_hint:
-        st.caption(title_hint)
+    for _, r in data.iterrows():
+        m = r.get("月齡")
+        if pd.isna(m) or m is None:
+            age_text = "年齡：—"
+        else:
+            y = int(m) // 12
+            mm = int(m) % 12
+            age_text = f"年齡：{y}歲{mm}月"
 
-    for band in band_order:
-        group = data[data["年齡段"] == band]
-        if len(group) == 0:
-            continue
+        imp = plain(r.get("重要性"))
+        confirm_y = plain(r.get("確認就讀年度"))
+        confirm_c = plain(r.get("確認就讀班級"))
 
-        with st.expander(f"{band}（{len(group)}）", expanded=True):
-            cols = st.columns(3)
-            i = 0
-            for _, r in group.iterrows():
-                m = r.get("月齡")
-                if pd.isna(m) or m is None:
-                    age_text = "年齡：—"
-                else:
-                    y = int(m) // 12
-                    mm = int(m) % 12
-                    age_text = f"年齡：{y}歲{mm}月"
+        confirm_badge = ""
+        if confirm_y and confirm_c:
+            confirm_badge = f'<span class="badge badge-blue">確認：{safe_text(confirm_y)} {safe_text(confirm_c)}</span>'
 
-                imp = ("" if r.get("重要性") is None else str(r.get("重要性"))).strip()
-                confirm_y = (r.get("確認就讀年度") or "").strip()
-                confirm_c = (r.get("確認就讀班級") or "").strip()
-                confirm_badge = ""
-                if confirm_y and confirm_c:
-                    confirm_badge = f'<span class="badge badge-blue">確認：{safe_text(confirm_y)} {safe_text(confirm_c)}</span>'
+        # ✅ 只顯示精簡資訊（不撐高）
+        brief_ref = plain(r.get("推薦人"))
+        brief_note = plain(r.get("備註"))
 
-                html = f"""
-                <div class="k-card">
-                  <div class="k-title">{safe_text(r.get("幼兒姓名"))}<span class="idpill">{safe_text(r.get("編號"))}</span></div>
-                  <div class="k-sub">{safe_text(age_text)}</div>
+        html = f"""
+        <div class="k-card">
+          <div class="k-head">
+            <div class="k-title">{safe_text(r.get("幼兒姓名"))}<span class="idpill">{safe_text(r.get("編號"))}</span></div>
+            <div class="k-sub">{safe_text(age_text)}</div>
 
-                  <div class="k-row">
-                    <span class="badge">報名：{safe_text(r.get("報名狀態") or "—")}</span>
-                    <span class="badge">聯繫：{safe_text(r.get("聯繫狀態") or "—")}</span>
-                    <span class="{badge_for_importance(imp)}">重要性：{safe_text(imp or "—")}</span>
-                    <span class="badge">預計班別：{safe_text(r.get("預計班別") or "—")}</span>
-                    {confirm_badge}
-                  </div>
+            <div class="k-row">
+              <span class="badge">報名：{safe_text(r.get("報名狀態") or "—")}</span>
+              <span class="badge">聯繫：{safe_text(r.get("聯繫狀態") or "—")}</span>
+              <span class="{badge_for_importance(imp)}">重要性：{safe_text(imp or "—")}</span>
+              {confirm_badge}
+            </div>
+          </div>
 
-                  <div class="k-meta">
-                    <div><span>家長：</span>{safe_text(r.get("家長稱呼") or "—")}　<span>電話：</span>{safe_text(r.get("電話") or "—")}</div>
-                    <div><span>登記：</span>{safe_text(r.get("登記日期") or "—")}</div>
-                    <div><span>推薦人：</span>{safe_text(r.get("推薦人") or "—")}</div>
-                    <div><span>備註：</span>{safe_text(r.get("備註") or "—")}</div>
-                  </div>
-                </div>
-                """
-                cols[i % 3].markdown(html, unsafe_allow_html=True)
-                i += 1
+          <div class="k-meta">
+            <div class="ellipsis"><span>家長：</span>{safe_text(r.get("家長稱呼") or "—")}　<span>電話：</span>{safe_text(r.get("電話") or "—")}</div>
+            <div class="ellipsis"><span>登記：</span>{safe_text(r.get("登記日期") or "—")}</div>
+            <div class="ellipsis2"><span>推薦人：</span>{safe_text(brief_ref or "—")}</div>
+            <div class="ellipsis2"><span>備註：</span>{safe_text(brief_note or "—")}</div>
+          </div>
+        </div>
+        """
+        st.markdown(html, unsafe_allow_html=True)
+
+        # ✅ 詳細資料（點開才看，不影響卡片高度）
+        with st.expander(f"查看詳細：{plain(r.get('幼兒姓名'))}（{plain(r.get('編號'))}）", expanded=False):
+            st.markdown(f"- **家長稱呼**：{plain(r.get('家長稱呼')) or '—'}")
+            st.markdown(f"- **電話**：{plain(r.get('電話')) or '—'}")
+            st.markdown(f"- **幼兒生日**：{plain(r.get('幼兒生日')) or '—'}")
+            st.markdown(f"- **登記日期**：{plain(r.get('登記日期')) or '—'}")
+            st.markdown(f"- **報名狀態**：{plain(r.get('報名狀態')) or '—'}")
+            st.markdown(f"- **聯繫狀態**：{plain(r.get('聯繫狀態')) or '—'}")
+            st.markdown(f"- **重要性**：{plain(r.get('重要性')) or '—'}")
+            st.markdown(f"- **確認就讀**：{plain(r.get('確認就讀年度')) or '—'} {plain(r.get('確認就讀班級')) or ''}")
+            st.markdown(f"- **推薦人**：{plain(r.get('推薦人')) or '—'}")
+            st.markdown(f"- **備註**：{plain(r.get('備註')) or '—'}")
+
+    # grid 結尾
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# 5) 主分頁：新生登記 / 確認就讀 / 其他
+# 5) 分頁
 # =========================
 tab_enroll, tab_confirm, tab_placeholder = st.tabs(["新生登記", "確認就讀（115）", "（其他模組）"])
 
@@ -379,7 +420,6 @@ tab_enroll, tab_confirm, tab_placeholder = st.tabs(["新生登記", "確認就�
 with tab_enroll:
     t_form, t_list = st.tabs(["表單", "名單"])
 
-    # ---------- 表單 ----------
     with t_form:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 新生登記")
@@ -406,7 +446,6 @@ with tab_enroll:
             with g:
                 child_bday = st.date_input("幼兒生日 *", value=date(2022, 1, 1))
 
-            # ✅ 依你的要求：不顯示「預計入學資訊」
             referrer = st.text_input("推薦人", placeholder="選填")
             notes = st.text_area("備註", placeholder="選填")
 
@@ -437,14 +476,11 @@ with tab_enroll:
                 row["電話"] = phone_clean
                 row["幼兒生日"] = str(child_bday)
 
-                # ✅ 保留欄位但寫空白（後續你要再啟用也容易）
-                row["預計入學資訊"] = ""
-
+                row["預計入學資訊"] = ""  # 目前不用
                 row["推薦人"] = (referrer or "").strip()
                 row["備註"] = (notes or "").strip()
                 row["重要性"] = importance
 
-                # ✅ 新增欄位：先留空
                 row["確認就讀年度"] = ""
                 row["確認就讀班級"] = ""
 
@@ -455,11 +491,10 @@ with tab_enroll:
                     st.error("寫入失敗")
                     st.code(str(e))
 
-    # ---------- 名單 ----------
     with t_list:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 名單整理")
-        st.markdown('<div class="small">用兩個大按鈕切換：未聯繫 / 已聯繫</div>', unsafe_allow_html=True)
+        st.markdown("### 名單整理（卡片對齊）")
+        st.markdown('<div class="small">卡片固定高度＋長文字省略，詳細內容點開看</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         try:
@@ -477,7 +512,6 @@ with tab_enroll:
             tmp["年齡段"] = tmp["月齡"].apply(age_band_from_months)
             tmp["預計班別"] = tmp["預計入學資訊"].astype(str).apply(guess_class_from_enroll_info)
 
-            # ---- 大按鈕切換（更直觀）----
             if "contact_view" not in st.session_state:
                 st.session_state["contact_view"] = "未聯繫"
 
@@ -493,7 +527,7 @@ with tab_enroll:
                     st.session_state["contact_view"] = "已聯繫"
 
             current = st.session_state["contact_view"]
-            st.caption(f"目前顯示：{current}（再依年齡段分區）")
+            st.caption(f"目前顯示：{current}（已做對齊）")
 
             if current == "未聯繫":
                 data = tmp[tmp["聯繫狀態"].astype(str).fillna("") == "未聯繫"].copy()
@@ -503,12 +537,22 @@ with tab_enroll:
             if len(data) == 0:
                 st.info("目前沒有資料")
             else:
-                render_cards(data)
+                # ✅ 依年齡段分區 + 每區都用對齊卡片
+                band_order = ["0–1歲","1–2歲","2–3歲","3–4歲","4–5歲","5–6歲","6歲以上","未知"]
+                data["年齡段"] = pd.Categorical(data["年齡段"], categories=band_order, ordered=True)
+                data = data.sort_values(["年齡段", "月齡"], ascending=[True, True]).reset_index(drop=True)
+
+                for band in band_order:
+                    g = data[data["年齡段"] == band].copy()
+                    if len(g) == 0:
+                        continue
+                    with st.expander(f"{band}（{len(g)}）", expanded=True):
+                        render_cards_aligned(g)
 
             st.markdown("---")
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 後台更新（含：確認就讀）")
-            st.markdown('<div class="small">在這裡設定「報名/聯繫/重要性」以及「確認就讀(115幼幼/小/中/大)」。</div>', unsafe_allow_html=True)
+            st.markdown('<div class="small">設定「報名/聯繫/重要性」以及「確認就讀(115幼幼/小/中/大)」。</div>', unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
             id_list = df["編號"].astype(str).tolist()
@@ -546,7 +590,7 @@ with tab_enroll:
                 )
 
             st.markdown("#### 確認就讀（空白＝尚未確認）")
-            d, e, f = st.columns([1,1,1])
+            d, e = st.columns(2)
             with d:
                 new_cy = st.selectbox(
                     "確認就讀年度",
@@ -561,11 +605,6 @@ with tab_enroll:
                     index=(["（空白）"] + CONFIRM_CLASS_OPTIONS).index(cur_cc) if cur_cc in CONFIRM_CLASS_OPTIONS else 0,
                     key="admin_cc"
                 )
-            with f:
-                if st.button("一鍵設為 115 幼幼", use_container_width=True):
-                    st.session_state["admin_cy"] = "115"
-                    st.session_state["admin_cc"] = "幼幼"
-                    st.rerun()
 
             if st.button("儲存更新", use_container_width=True):
                 try:
@@ -573,7 +612,6 @@ with tab_enroll:
                     update_cell_by_row_index(row_idx, "聯繫狀態", new_contact)
                     update_cell_by_row_index(row_idx, "重要性", new_imp)
 
-                    # 確認就讀：空白選項處理
                     cy_val = "" if new_cy == "（空白）" else new_cy
                     cc_val = "" if new_cc == "（空白）" else new_cc
                     update_cell_by_row_index(row_idx, "確認就讀年度", cy_val)
@@ -591,7 +629,7 @@ with tab_enroll:
 with tab_confirm:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 確認就讀名單（115）")
-    st.markdown('<div class="small">只會顯示：確認就讀年度＝115 且 班級＝幼幼/小班/中班/大班</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small">只顯示：確認就讀年度＝115 且 班級＝幼幼/小班/中班/大班</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     try:
@@ -611,9 +649,8 @@ with tab_confirm:
 
         confirmed = tmp[tmp.apply(is_confirmed_115, axis=1)].copy()
         if len(confirmed) == 0:
-            st.info("目前沒有「115 確認就讀」的資料（請到『新生登記 → 名單 → 後台更新』設定確認就讀年度/班級）")
+            st.info("目前沒有「115 確認就讀」資料（請到『新生登記 → 名單 → 後台更新』設定）")
         else:
-            # 依班級分區顯示
             for cls in CONFIRM_CLASS_OPTIONS:
                 g = confirmed[(confirmed["確認就讀年度"].astype(str).fillna("") == "115") &
                               (confirmed["確認就讀班級"].astype(str).fillna("") == cls)].copy()
@@ -621,7 +658,7 @@ with tab_confirm:
                     if len(g) == 0:
                         st.caption("目前沒有")
                     else:
-                        render_cards(g)
+                        render_cards_aligned(g)
 
 # =========================
 # C) 其他模組
