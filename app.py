@@ -80,7 +80,6 @@ div[data-testid="stSelectbox"] > div{ border-radius:14px !important; }
 .badge-warn{ background:rgba(255,149,0,.12); border-color:rgba(255,149,0,.22); }
 .badge-danger{ background:rgba(255,59,48,.12); border-color:rgba(255,59,48,.22); }
 
-/* ✅ 卡片對齊核心：grid + 固定卡片高度 + 長內容省略 */
 .k-grid{
   display:grid;
   grid-template-columns:repeat(3, minmax(0, 1fr));
@@ -100,19 +99,17 @@ div[data-testid="stSelectbox"] > div{ border-radius:14px !important; }
   border-radius:18px;
   box-shadow:0 10px 26px rgba(0,0,0,0.06);
   padding:14px 14px 12px 14px;
-  height: 245px;            /* ✅ 固定高度：想更高就改這個數字 */
+  height: 245px;
   display:flex;
   flex-direction:column;
   overflow:hidden;
 }
-.k-head{ flex:0 0 auto; }
 .k-title{
   font-size:1.05rem; font-weight:900; letter-spacing:-0.01em; margin:0; color:#1D1D1F;
   display:flex; align-items:center; gap:8px; flex-wrap:wrap;
 }
 .k-sub{ margin-top:4px; color:#6E6E73; font-size:.9rem; }
 .k-row{ margin-top:10px; display:flex; flex-wrap:wrap; gap:6px; }
-
 .k-meta{
   margin-top:10px;
   font-size:.9rem;
@@ -122,8 +119,6 @@ div[data-testid="stSelectbox"] > div{ border-radius:14px !important; }
   overflow:hidden;
 }
 .k-meta span{ color:#6E6E73; }
-
-/* ✅ 長文字省略號 */
 .ellipsis{
   display:block;
   overflow:hidden;
@@ -152,34 +147,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# 2) 你的 Sheet 欄位（已改成你說的 11 欄）
+# 2) 你的 Sheet 位置
 # =========================
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
 WORKSHEET_NAME = "enrollments"
 
-COLUMNS = [
-    "報名狀態",
-    "聯繫狀態",
-    "登記日期",
-    "幼兒姓名",
-    "家長稱呼",
-    "電話",
-    "幼兒生日",
-    "預計入學資訊",
-    "推薦人",
-    "備註",
-    "重要性",
+# 你這個版本固定會用到的欄位（Excel 可以多欄/少欄，但這些最好要有）
+NEEDED_COLS = [
+    "報名狀態","聯繫狀態","登記日期","幼兒姓名","家長稱呼","電話","幼兒生日",
+    "預計入學資訊","推薦人","備註","重要性"
 ]
 
 REPORT_STATUS = ["新登記", "候補", "已入學", "不錄取"]
 CONTACT_STATUS = ["未聯繫", "已聯繫", "已參觀", "無回應"]
 IMPORTANCE = ["高", "中", "低"]
-
-DEFAULT_ROW = {
-    "報名狀態": "新登記",
-    "聯繫狀態": "未聯繫",
-    "重要性": "中",
-}
 
 # =========================
 # 3) Google Sheets（gspread）
@@ -213,27 +194,23 @@ def get_sheet_header(ws) -> list:
         return []
     return values[0]
 
-def ensure_header_exact(ws):
-    header = get_sheet_header(ws)
-    if header != COLUMNS:
-        ws.update("A1", [COLUMNS])
-
 def read_df() -> pd.DataFrame:
     ws = open_ws()
-    ensure_header_exact(ws)
-
     values = ws.get_all_values()
     if not values:
-        return pd.DataFrame(columns=COLUMNS)
+        return pd.DataFrame(columns=NEEDED_COLS)
 
     header = values[0]
     rows = values[1:]
     df = pd.DataFrame(rows, columns=header)
 
-    for c in COLUMNS:
+    # ✅ Excel 沒有的欄位就補空欄（不改 Excel）
+    for c in NEEDED_COLS:
         if c not in df.columns:
             df[c] = ""
-    df = df[COLUMNS].copy()
+
+    # ✅ 只取需要欄位（你想顯示/使用的）
+    df = df[NEEDED_COLS].copy()
 
     # 去除空白列
     df = df[~(df.fillna("").astype(str).apply(lambda r: "".join(r.values).strip() == "", axis=1))].copy()
@@ -242,13 +219,25 @@ def read_df() -> pd.DataFrame:
 
 def append_row(row: dict):
     ws = open_ws()
-    ensure_header_exact(ws)
-    ws.append_row([row.get(c, "") for c in COLUMNS], value_input_option="USER_ENTERED")
+    header = get_sheet_header(ws)
+    if not header:
+        # 如果 Excel 完全沒標題，就幫它寫一個「以你 Excel 當下想要的欄位」(至少要 needed)
+        ws.update("A1", [NEEDED_COLS])
+        header = NEEDED_COLS
+
+    # ✅ 寫入時「依照 Excel 目前 header 欄位順序」去寫，不會覆蓋 header
+    out = []
+    for col in header:
+        out.append(row.get(col, ""))  # Excel 有的欄位就寫，沒有就空白
+    ws.append_row(out, value_input_option="USER_ENTERED")
 
 def update_cell_by_row_index(row_index_in_df: int, col_name: str, value: str):
     ws = open_ws()
-    ensure_header_exact(ws)
-    col_idx = COLUMNS.index(col_name) + 1
+    header = get_sheet_header(ws)
+    if col_name not in header:
+        raise RuntimeError(f"Excel 沒有這個欄位：{col_name}（請先在第一列加入欄位名稱）")
+
+    col_idx = header.index(col_name) + 1
     ws.update_cell(row_index_in_df + 2, col_idx, value)
 
 # =========================
@@ -308,10 +297,8 @@ def plain(v) -> str:
     return "" if v is None else str(v).strip()
 
 def make_admin_key(row: pd.Series) -> str:
-    # ✅ 因為你已刪掉「編號」，後台用這個組合當唯一鍵
     return f"{plain(row.get('幼兒姓名'))}｜{plain(row.get('電話'))}｜{plain(row.get('登記日期'))}"
 
-# ✅ 對齊版卡片渲染（固定高度 + 長文字省略 + 詳細點開看）
 def render_cards_aligned(data: pd.DataFrame):
     st.markdown('<div class="k-grid">', unsafe_allow_html=True)
 
@@ -322,7 +309,7 @@ def render_cards_aligned(data: pd.DataFrame):
 
         html = f"""
         <div class="k-card">
-          <div class="k-head">
+          <div>
             <div class="k-title">{safe_text(r.get("幼兒姓名") or "—")}</div>
             <div class="k-sub">{safe_text(age_text)}</div>
 
@@ -344,28 +331,16 @@ def render_cards_aligned(data: pd.DataFrame):
         st.markdown(html, unsafe_allow_html=True)
 
         with st.expander(f"查看詳細：{plain(r.get('幼兒姓名'))}（{plain(r.get('電話'))}）", expanded=False):
-            st.markdown(f"- **報名狀態**：{plain(r.get('報名狀態')) or '—'}")
-            st.markdown(f"- **聯繫狀態**：{plain(r.get('聯繫狀態')) or '—'}")
-            st.markdown(f"- **重要性**：{plain(r.get('重要性')) or '—'}")
-            st.markdown(f"- **登記日期**：{plain(r.get('登記日期')) or '—'}")
-            st.markdown(f"- **幼兒姓名**：{plain(r.get('幼兒姓名')) or '—'}")
-            st.markdown(f"- **家長稱呼**：{plain(r.get('家長稱呼')) or '—'}")
-            st.markdown(f"- **電話**：{plain(r.get('電話')) or '—'}")
-            st.markdown(f"- **幼兒生日**：{plain(r.get('幼兒生日')) or '—'}")
-            st.markdown(f"- **預計入學資訊**：{plain(r.get('預計入學資訊')) or '—'}")
-            st.markdown(f"- **推薦人**：{plain(r.get('推薦人')) or '—'}")
-            st.markdown(f"- **備註**：{plain(r.get('備註')) or '—'}")
+            for col in NEEDED_COLS:
+                st.markdown(f"- **{col}**：{plain(r.get(col)) or '—'}")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# 5) 分頁（只保留你需要的：新生登記）
+# 5) 分頁
 # =========================
 tab_enroll, tab_other = st.tabs(["新生登記", "（其他模組）"])
 
-# =========================
-# A) 新生登記
-# =========================
 with tab_enroll:
     t_form, t_list = st.tabs(["表單", "名單"])
 
@@ -426,9 +401,7 @@ with tab_enroll:
                 if exists:
                     st.warning("這支電話已經登記過（已阻擋重複報名）")
                 else:
-                    row = {c: "" for c in COLUMNS}
-                    row.update(DEFAULT_ROW)
-
+                    row = {col: "" for col in NEEDED_COLS}
                     row["報名狀態"] = report_status
                     row["聯繫狀態"] = contact_status
                     row["登記日期"] = now_str()
@@ -451,7 +424,7 @@ with tab_enroll:
     with t_list:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 名單（卡片對齊）")
-        st.markdown('<div class="small">卡片固定高度＋長文字省略，詳細內容點開看</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small">Excel 欄位不會再被 APP 改回去</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         try:
@@ -468,7 +441,6 @@ with tab_enroll:
             tmp["月齡"] = tmp["幼兒生日"].apply(calc_age_months)
             tmp["年齡段"] = tmp["月齡"].apply(age_band_from_months)
 
-            # ✅ 兩個大按鈕：未聯繫 / 已聯繫
             if "contact_view" not in st.session_state:
                 st.session_state["contact_view"] = "未聯繫"
 
@@ -494,7 +466,6 @@ with tab_enroll:
             if len(data) == 0:
                 st.info("目前沒有資料")
             else:
-                # ✅ 依年齡段分區 + 對齊卡片
                 band_order = ["0–1歲","1–2歲","2–3歲","3–4歲","4–5歲","5–6歲","6歲以上","未知"]
                 data["年齡段"] = pd.Categorical(data["年齡段"], categories=band_order, ordered=True)
                 data = data.sort_values(["年齡段", "月齡"], ascending=[True, True]).reset_index(drop=True)
@@ -509,15 +480,14 @@ with tab_enroll:
             st.markdown("---")
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 後台狀態管理（更新報名/聯繫/重要性）")
-            st.markdown('<div class="small">因為 Excel 沒有「編號」，後台用「姓名｜電話｜登記日期」來定位。</div>', unsafe_allow_html=True)
+            st.markdown('<div class="small">定位方式：姓名｜電話｜登記日期（因為 Excel 沒有編號）</div>', unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
             df_admin = df.copy()
             df_admin["_key"] = df_admin.apply(make_admin_key, axis=1)
-
             key_list = df_admin["_key"].tolist()
-            target_key = st.selectbox("選擇一筆資料", key_list, key="admin_select_key")
 
+            target_key = st.selectbox("選擇一筆資料", key_list, key="admin_select_key")
             row_idx = df_admin.index[df_admin["_key"] == target_key].tolist()[0]
 
             cur_report = plain(df_admin.loc[row_idx, "報名狀態"]) or "新登記"
@@ -526,26 +496,14 @@ with tab_enroll:
 
             a, b, c = st.columns(3)
             with a:
-                new_report = st.selectbox(
-                    "報名狀態",
-                    REPORT_STATUS,
-                    index=REPORT_STATUS.index(cur_report) if cur_report in REPORT_STATUS else 0,
-                    key="admin_report"
-                )
+                new_report = st.selectbox("報名狀態", REPORT_STATUS,
+                                          index=REPORT_STATUS.index(cur_report) if cur_report in REPORT_STATUS else 0)
             with b:
-                new_contact = st.selectbox(
-                    "聯繫狀態",
-                    CONTACT_STATUS,
-                    index=CONTACT_STATUS.index(cur_contact) if cur_contact in CONTACT_STATUS else 0,
-                    key="admin_contact"
-                )
+                new_contact = st.selectbox("聯繫狀態", CONTACT_STATUS,
+                                           index=CONTACT_STATUS.index(cur_contact) if cur_contact in CONTACT_STATUS else 0)
             with c:
-                new_imp = st.selectbox(
-                    "重要性",
-                    IMPORTANCE,
-                    index=IMPORTANCE.index(cur_imp) if cur_imp in IMPORTANCE else 1,
-                    key="admin_imp"
-                )
+                new_imp = st.selectbox("重要性", IMPORTANCE,
+                                       index=IMPORTANCE.index(cur_imp) if cur_imp in IMPORTANCE else 1)
 
             if st.button("儲存更新", use_container_width=True):
                 try:
@@ -558,9 +516,6 @@ with tab_enroll:
                     st.error("更新失敗")
                     st.code(str(e))
 
-# =========================
-# B) 其他模組
-# =========================
 with tab_other:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 其他模組")
