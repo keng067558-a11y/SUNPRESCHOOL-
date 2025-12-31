@@ -115,7 +115,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# 2) Google Sheet 欄位（加上：學年度 / 預計班別 / 確認就讀）
+# 2) Sheet 欄位（你最新版本）
 # =========================
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
 WORKSHEET_NAME = "enrollments"
@@ -133,25 +133,16 @@ COLUMNS = [
     "推薦人",
     "備註",
     "重要性",
-    "學年度",      # ✅ 新增
-    "預計班別",    # ✅ 新增（幼幼/小班/中班/大班）
-    "確認就讀",    # ✅ 新增（是/否）
 ]
 
 REPORT_STATUS = ["新登記", "已入學", "候補", "不錄取"]
 CONTACT_STATUS = ["未聯繫", "已聯繫", "已參觀", "無回應"]
 IMPORTANCE = ["高", "中", "低"]
-SCHOOL_YEAR = ["114", "115", "116"]
-CLASS_LEVEL = ["幼幼", "小班", "中班", "大班"]
-CONFIRM = ["否", "是"]
 
 DEFAULT_ROW = {
     "報名狀態": "新登記",
     "聯繫狀態": "未聯繫",
     "重要性": "中",
-    "學年度": "115",
-    "預計班別": "幼幼",
-    "確認就讀": "否",
 }
 
 # =========================
@@ -278,8 +269,75 @@ def badge_for_importance(v: str) -> str:
         return "badge badge-ok"
     return "badge"
 
-def badge_for_confirm(v: str) -> str:
-    return "badge badge-ok" if (v or "").strip() == "是" else "badge"
+# ✅ B 模式：從「預計入學資訊」抓班別（你還沒加班別欄位也能用）
+def guess_class_from_enroll_info(info: str) -> str:
+    t = (info or "").strip()
+    if not t:
+        return "未設定"
+    # 常見關鍵字
+    for k in ["幼幼", "小班", "中班", "大班"]:
+        if k in t:
+            return k
+    # 若寫「幼班/小/中/大」也盡量猜
+    if "幼" in t:
+        return "幼幼"
+    if "小" in t:
+        return "小班"
+    if "中" in t:
+        return "中班"
+    if "大" in t:
+        return "大班"
+    return "未設定"
+
+def render_cards(data: pd.DataFrame, title_hint: str = ""):
+    band_order = ["0–1歲","1–2歲","2–3歲","3–4歲","4–5歲","5–6歲","6歲以上","未知"]
+    data = data.copy()
+    data["年齡段"] = pd.Categorical(data["年齡段"], categories=band_order, ordered=True)
+    data = data.sort_values(["年齡段", "月齡"], ascending=[True, True]).reset_index(drop=True)
+
+    if title_hint:
+        st.caption(title_hint)
+
+    for band in band_order:
+        group = data[data["年齡段"] == band]
+        if len(group) == 0:
+            continue
+        with st.expander(f"{band}（{len(group)}）", expanded=True):
+            cols = st.columns(3)
+            i = 0
+            for _, r in group.iterrows():
+                m = r.get("月齡")
+                if pd.isna(m) or m is None:
+                    age_text = "年齡：—"
+                else:
+                    y = int(m) // 12
+                    mm = int(m) % 12
+                    age_text = f"年齡：{y}歲{mm}月"
+
+                imp = safe(r.get("重要性"))
+                html = f"""
+                <div class="k-card">
+                  <div class="k-title">{safe(r.get("幼兒姓名"))}<span class="idpill">{safe(r.get("編號"))}</span></div>
+                  <div class="k-sub">{age_text}</div>
+
+                  <div class="k-row">
+                    <span class="badge">報名：{safe(r.get("報名狀態")) or "—"}</span>
+                    <span class="badge">聯繫：{safe(r.get("聯繫狀態")) or "—"}</span>
+                    <span class="{badge_for_importance(imp)}">重要性：{imp or "—"}</span>
+                    <span class="badge">預計班別：{safe(r.get("預計班別")) or "—"}</span>
+                  </div>
+
+                  <div class="k-meta">
+                    <div><span>家長：</span>{safe(r.get("家長稱呼")) or "—"}　<span>電話：</span>{safe(r.get("電話")) or "—"}</div>
+                    <div><span>登記：</span>{safe(r.get("登記日期")) or "—"}</div>
+                    <div><span>預計入學：</span>{safe(r.get("預計入學資訊")) or "—"}</div>
+                    <div><span>推薦人：</span>{safe(r.get("推薦人")) or "—"}</div>
+                    <div><span>備註：</span>{safe(r.get("備註")) or "—"}</div>
+                  </div>
+                </div>
+                """
+                cols[i % 3].markdown(html, unsafe_allow_html=True)
+                i += 1
 
 # =========================
 # 5) 主分頁
@@ -296,7 +354,7 @@ with tab_enroll:
         st.markdown("</div>", unsafe_allow_html=True)
 
         with st.form("enroll_form", clear_on_submit=True):
-            a, b, c = st.columns([1, 1, 1])
+            a, b, c = st.columns(3)
             with a:
                 report_status = st.selectbox("報名狀態", REPORT_STATUS, index=0)
             with b:
@@ -304,27 +362,19 @@ with tab_enroll:
             with c:
                 importance = st.selectbox("重要性", IMPORTANCE, index=1)
 
-            d, e, f = st.columns([1, 1, 1])
+            d, e = st.columns(2)
             with d:
-                school_year = st.selectbox("學年度", SCHOOL_YEAR, index=SCHOOL_YEAR.index("115"))
-            with e:
-                class_level = st.selectbox("預計班別", CLASS_LEVEL, index=0)
-            with f:
-                confirm = st.selectbox("確認就讀", CONFIRM, index=0)
-
-            g, h = st.columns(2)
-            with g:
                 child_name = st.text_input("幼兒姓名 *", placeholder="例如：王小明")
-            with h:
+            with e:
                 parent_title = st.text_input("家長稱呼 *", placeholder="例如：王爸爸／王媽媽")
 
-            i, j = st.columns(2)
-            with i:
+            f, g = st.columns(2)
+            with f:
                 phone = st.text_input("電話 *", placeholder="例如：0912345678")
-            with j:
+            with g:
                 child_bday = st.date_input("幼兒生日 *", value=date(2022, 1, 1))
 
-            enroll_info = st.text_input("預計入學資訊", placeholder="例如：115學年度小班／2026-09")
+            enroll_info = st.text_input("預計入學資訊（可寫：115 幼幼/小班/中班/大班）", placeholder="例如：115小班／2026-09")
             referrer = st.text_input("推薦人", placeholder="選填")
             notes = st.text_area("備註", placeholder="選填")
 
@@ -358,9 +408,6 @@ with tab_enroll:
                 row["推薦人"] = (referrer or "").strip()
                 row["備註"] = (notes or "").strip()
                 row["重要性"] = importance
-                row["學年度"] = school_year
-                row["預計班別"] = class_level
-                row["確認就讀"] = confirm
 
                 try:
                     append_row(row)
@@ -372,8 +419,8 @@ with tab_enroll:
     # ---------- 名單 ----------
     with t_list:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 名單")
-        st.markdown('<div class="small">未聯繫 / 已聯繫 / 115確認就讀</div>', unsafe_allow_html=True)
+        st.markdown("### 名單整理")
+        st.markdown('<div class="small">依聯繫狀態 / 依預計就讀班級 分開顯示</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         try:
@@ -386,130 +433,41 @@ with tab_enroll:
         if len(df) == 0:
             st.info("目前沒有資料")
         else:
-            # 加上年齡段排序用
             tmp = df.copy()
             tmp["月齡"] = tmp["幼兒生日"].apply(calc_age_months)
             tmp["年齡段"] = tmp["月齡"].apply(age_band_from_months)
 
-            # 三個視角
-            v1, v2, v3 = st.tabs(["未聯繫", "已聯繫", "115 確認就讀名單"])
+            # ✅ 這裡建立「預計班別」（先用預計入學資訊推估）
+            tmp["預計班別"] = tmp["預計入學資訊"].astype(str).apply(guess_class_from_enroll_info)
 
-            def render_cards(data: pd.DataFrame, title_hint: str = ""):
-                band_order = ["0–1歲","1–2歲","2–3歲","3–4歲","4–5歲","5–6歲","6歲以上","未知"]
-                data["年齡段"] = pd.Categorical(data["年齡段"], categories=band_order, ordered=True)
-                data = data.sort_values(["年齡段", "月齡"], ascending=[True, True]).reset_index(drop=True)
+            v1, v2, v3 = st.tabs(["未聯繫", "已聯繫", "依預計就讀班級"])
 
-                if title_hint:
-                    st.caption(title_hint)
-
-                for band in band_order:
-                    group = data[data["年齡段"] == band]
-                    if len(group) == 0:
-                        continue
-
-                    with st.expander(f"{band}（{len(group)}）", expanded=True):
-                        cols = st.columns(3)
-                        i = 0
-                        for _, r in group.iterrows():
-                            m = r.get("月齡")
-                            if pd.isna(m) or m is None:
-                                age_text = "年齡：—"
-                            else:
-                                y = int(m) // 12
-                                mm = int(m) % 12
-                                age_text = f"年齡：{y}歲{mm}月"
-
-                            imp = safe(r.get("重要性"))
-                            imp_badge = badge_for_importance(imp)
-                            conf = safe(r.get("確認就讀"))
-                            conf_badge = badge_for_confirm(conf)
-
-                            html = f"""
-                            <div class="k-card">
-                              <div class="k-title">{safe(r.get("幼兒姓名"))}<span class="idpill">{safe(r.get("編號"))}</span></div>
-                              <div class="k-sub">{age_text}</div>
-
-                              <div class="k-row">
-                                <span class="badge">報名：{safe(r.get("報名狀態")) or "—"}</span>
-                                <span class="badge">聯繫：{safe(r.get("聯繫狀態")) or "—"}</span>
-                                <span class="{imp_badge}">重要性：{imp or "—"}</span>
-                                <span class="badge">學年度：{safe(r.get("學年度")) or "—"}</span>
-                                <span class="badge">班別：{safe(r.get("預計班別")) or "—"}</span>
-                                <span class="{conf_badge}">確認就讀：{conf or "—"}</span>
-                              </div>
-
-                              <div class="k-meta">
-                                <div><span>家長：</span>{safe(r.get("家長稱呼")) or "—"}　<span>電話：</span>{safe(r.get("電話")) or "—"}</div>
-                                <div><span>登記：</span>{safe(r.get("登記日期")) or "—"}</div>
-                                <div><span>預計入學：</span>{safe(r.get("預計入學資訊")) or "—"}</div>
-                                <div><span>推薦人：</span>{safe(r.get("推薦人")) or "—"}</div>
-                                <div><span>備註：</span>{safe(r.get("備註")) or "—"}</div>
-                              </div>
-                            </div>
-                            """
-                            cols[i % 3].markdown(html, unsafe_allow_html=True)
-                            i += 1
-
-            # --- 未聯繫 ---
             with v1:
                 data = tmp[tmp["聯繫狀態"].astype(str).fillna("") == "未聯繫"].copy()
                 if len(data) == 0:
                     st.info("目前沒有未聯繫資料")
                 else:
-                    render_cards(data, "只顯示：聯繫狀態＝未聯繫")
+                    render_cards(data, "只顯示：聯繫狀態＝未聯繫（再依年齡段分區）")
 
-            # --- 已聯繫 ---
             with v2:
                 data = tmp[tmp["聯繫狀態"].astype(str).fillna("") != "未聯繫"].copy()
                 if len(data) == 0:
                     st.info("目前沒有已聯繫資料")
                 else:
-                    render_cards(data, "只顯示：聯繫狀態≠未聯繫")
+                    render_cards(data, "只顯示：聯繫狀態≠未聯繫（再依年齡段分區）")
 
-            # --- 115 確認就讀名單（依班別分組）---
             with v3:
-                data = tmp[
-                    (tmp["學年度"].astype(str).fillna("") == "115") &
-                    (tmp["確認就讀"].astype(str).fillna("") == "是")
-                ].copy()
+                st.caption("依『預計入學資訊』文字推估：幼幼 / 小班 / 中班 / 大班（你之後加正式欄位，我再改成 100% 準確）")
+                class_order = ["幼幼", "小班", "中班", "大班", "未設定"]
+                for lv in class_order:
+                    g = tmp[tmp["預計班別"] == lv].copy()
+                    with st.expander(f"{lv}（{len(g)}）", expanded=True):
+                        if len(g) == 0:
+                            st.caption("目前沒有")
+                        else:
+                            # 這裡就直接卡片排，不再分年齡段也行；但你要更清楚，我保留年齡段分區
+                            render_cards(g)
 
-                if len(data) == 0:
-                    st.info("目前 115 學年度尚無『確認就讀』名單")
-                else:
-                    st.markdown("#### 115 確認就讀名單（依班別）")
-                    for lv in CLASS_LEVEL:
-                        g = data[data["預計班別"].astype(str).fillna("") == lv].copy()
-                        with st.expander(f"{lv}（{len(g)}）", expanded=True):
-                            if len(g) == 0:
-                                st.caption("目前沒有")
-                            else:
-                                # 這裡就不用再分年齡段了，直接卡片排
-                                cols = st.columns(3)
-                                i = 0
-                                for _, r in g.iterrows():
-                                    imp = safe(r.get("重要性"))
-                                    html = f"""
-                                    <div class="k-card">
-                                      <div class="k-title">{safe(r.get("幼兒姓名"))}<span class="idpill">{safe(r.get("編號"))}</span></div>
-                                      <div class="k-sub">家長：{safe(r.get("家長稱呼")) or "—"}　電話：{safe(r.get("電話")) or "—"}</div>
-                                      <div class="k-row">
-                                        <span class="badge">報名：{safe(r.get("報名狀態")) or "—"}</span>
-                                        <span class="badge">聯繫：{safe(r.get("聯繫狀態")) or "—"}</span>
-                                        <span class="{badge_for_importance(imp)}">重要性：{imp or "—"}</span>
-                                        <span class="badge badge-ok">確認就讀：是</span>
-                                      </div>
-                                      <div class="k-meta">
-                                        <div><span>登記：</span>{safe(r.get("登記日期")) or "—"}</div>
-                                        <div><span>預計入學：</span>{safe(r.get("預計入學資訊")) or "—"}</div>
-                                        <div><span>推薦人：</span>{safe(r.get("推薦人")) or "—"}</div>
-                                        <div><span>備註：</span>{safe(r.get("備註")) or "—"}</div>
-                                      </div>
-                                    </div>
-                                    """
-                                    cols[i % 3].markdown(html, unsafe_allow_html=True)
-                                    i += 1
-
-            # ---------- 更新（用編號定位） ----------
             st.markdown("---")
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 更新")
@@ -519,13 +477,9 @@ with tab_enroll:
             target_id = st.selectbox("選擇編號", id_list)
 
             row_idx = df.index[df["編號"].astype(str) == str(target_id)].tolist()[0]
-
             cur_report = df.loc[row_idx, "報名狀態"] or "新登記"
             cur_contact = df.loc[row_idx, "聯繫狀態"] or "未聯繫"
             cur_imp = df.loc[row_idx, "重要性"] or "中"
-            cur_year = df.loc[row_idx, "學年度"] or "115"
-            cur_class = df.loc[row_idx, "預計班別"] or "幼幼"
-            cur_confirm = df.loc[row_idx, "確認就讀"] or "否"
 
             a, b, c = st.columns(3)
             with a:
@@ -538,25 +492,11 @@ with tab_enroll:
                 new_imp = st.selectbox("重要性", IMPORTANCE,
                                        index=IMPORTANCE.index(cur_imp) if cur_imp in IMPORTANCE else 1)
 
-            d, e, f = st.columns(3)
-            with d:
-                new_year = st.selectbox("學年度", SCHOOL_YEAR,
-                                        index=SCHOOL_YEAR.index(cur_year) if cur_year in SCHOOL_YEAR else 1)
-            with e:
-                new_class = st.selectbox("預計班別", CLASS_LEVEL,
-                                         index=CLASS_LEVEL.index(cur_class) if cur_class in CLASS_LEVEL else 0)
-            with f:
-                new_confirm = st.selectbox("確認就讀", CONFIRM,
-                                           index=CONFIRM.index(cur_confirm) if cur_confirm in CONFIRM else 0)
-
             if st.button("儲存", use_container_width=True):
                 try:
                     update_cell_by_row_index(row_idx, "報名狀態", new_report)
                     update_cell_by_row_index(row_idx, "聯繫狀態", new_contact)
                     update_cell_by_row_index(row_idx, "重要性", new_imp)
-                    update_cell_by_row_index(row_idx, "學年度", new_year)
-                    update_cell_by_row_index(row_idx, "預計班別", new_class)
-                    update_cell_by_row_index(row_idx, "確認就讀", new_confirm)
                     st.success("已更新")
                     st.rerun()
                 except Exception as e:
