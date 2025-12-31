@@ -116,7 +116,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# 2) Sheet 欄位（你目前版本）
+# 2) Sheet 欄位
 # =========================
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
 WORKSHEET_NAME = "enrollments"
@@ -200,7 +200,6 @@ def read_df() -> pd.DataFrame:
             df[c] = ""
     df = df[COLUMNS].copy()
 
-    # 去掉空列
     df = df[~(df.fillna("").astype(str).apply(lambda r: "".join(r.values).strip() == "", axis=1))].copy()
     df.reset_index(drop=True, inplace=True)
     return df
@@ -267,13 +266,14 @@ def badge_for_importance(v: str) -> str:
         return "badge badge-ok"
     return "badge"
 
-# ✅ 關鍵：把資料內容做 HTML 轉義，避免破壞卡片
+# ✅ 關鍵修正：除了 < > 轉義，也把 ` 反引號轉掉，避免 Markdown 變 code block
 def safe_text(v) -> str:
     s = "" if v is None else str(v)
     s = s.replace("\r\n", "\n").replace("\r", "\n")
-    return html_escape(s).replace("\n", "<br>")
+    s = html_escape(s)                 # 轉義 < > & "
+    s = s.replace("`", "&#96;")        # ← 這行是重點：消掉 ``` 的破壞力
+    return s.replace("\n", "<br>")     # 換行顯示
 
-# ✅ 從「預計入學資訊」推估班別（你還沒加班別欄位也能分組）
 def guess_class_from_enroll_info(info: str) -> str:
     t = (info or "").strip()
     if not t:
@@ -351,7 +351,6 @@ tab_enroll, tab_placeholder = st.tabs(["新生登記", "（其他模組）"])
 with tab_enroll:
     t_form, t_list = st.tabs(["表單", "名單"])
 
-    # ---------- 表單 ----------
     with t_form:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 新生登記")
@@ -420,11 +419,10 @@ with tab_enroll:
                     st.error("寫入失敗")
                     st.code(str(e))
 
-    # ---------- 名單 ----------
     with t_list:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 名單整理")
-        st.markdown('<div class="small">已修正：備註/推薦人含特殊字元時，不會再把卡片弄壞</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small">已修正：某些資料含 ``` / ` 時，卡片不會再被 Markdown 變成程式碼區塊</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         try:
