@@ -1,14 +1,20 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import time
 
-st.set_page_config(page_title="GSHEETS 連線測試", page_icon="✅", layout="wide")
-st.title("✅ Google Sheets 連線測試")
+st.set_page_config(page_title="GSHEETS 連線測試（加強版）", page_icon="✅", layout="wide")
+st.title("✅ Google Sheets 連線測試（加強版）")
 
-# 1) 連線
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit"
+WORKSHEET = "enrollments"
+
+st.markdown(f"目前連到的試算表：[{SHEET_URL}]({SHEET_URL})")
+st.caption("請確認你在 Google Drive 打開的就是這一份，並且切到 enrollments 分頁。")
+
 try:
     from streamlit_gsheets import GSheetsConnection
-except Exception as e:
+except Exception:
     st.error("缺少套件 streamlit-gsheets，請確認 requirements.txt 有安裝 streamlit-gsheets==0.1.0")
     st.stop()
 
@@ -18,48 +24,50 @@ def get_conn():
 
 conn = get_conn()
 
-# 2) 讀取
-st.subheader("1) 讀取 enrollments 工作表")
-try:
-    df = conn.read(worksheet="enrollments")
+REQUIRED_COLS = [
+    "id","timestamp","student_name","gender","birth_date",
+    "desired_class","start_month","guardian_name","guardian_relation",
+    "phone","email","address","notes","status"
+]
+
+def read_sheet_no_cache():
+    # 這裡不使用 cache_data，確保每次都重新讀
+    df = conn.read(worksheet=WORKSHEET)
     if df is None or len(df) == 0:
-        st.info("讀取成功，但目前工作表是空的（或只有表頭）。")
-        df = pd.DataFrame(columns=[
-            "id","timestamp","student_name","gender","birth_date",
-            "desired_class","start_month","guardian_name","guardian_relation",
-            "phone","email","address","notes","status"
-        ])
-    st.success("✅ 讀取成功")
-    st.dataframe(df, use_container_width=True, hide_index=True)
-except Exception as e:
-    st.error("❌ 讀取失敗（多半是：Secrets 格式、工作表名稱、或未分享給 service account）")
-    st.code(str(e))
-    st.stop()
+        return pd.DataFrame(columns=REQUIRED_COLS)
+    for c in REQUIRED_COLS:
+        if c not in df.columns:
+            df[c] = ""
+    df = df[REQUIRED_COLS]
+    df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(0).astype(int)
+    df["timestamp"] = df["timestamp"].astype(str)
+    return df
+
+st.subheader("1) 重新讀取（即時）")
+if st.button("🔄 重新讀取 Google 試算表", use_container_width=True):
+    st.session_state["_force_refresh"] = str(time.time())
+
+df = read_sheet_no_cache()
+st.success(f"✅ 讀取成功，目前筆數：{len(df)}")
+st.dataframe(df.tail(20), use_container_width=True, hide_index=True)
 
 st.divider()
 
-# 3) 寫入測試
-st.subheader("2) 寫入測試（新增一筆測試資料）")
-st.caption("按下按鈕後，會在表格最後新增一筆 TEST 資料。")
+st.subheader("2) 寫入測試（新增一筆唯一資料）")
+st.caption("按下後會新增一筆資料，並且立刻再讀回來確認最後一筆是否出現在 Google 試算表中。")
 
-if st.button("➕ 新增 TEST 資料", use_container_width=True):
+if st.button("➕ 新增一筆 TEST（含時間戳）", use_container_width=True):
     try:
-        df2 = df.copy()
-        # 確保欄位存在
-        required_cols = [
-            "id","timestamp","student_name","gender","birth_date",
-            "desired_class","start_month","guardian_name","guardian_relation",
-            "phone","email","address","notes","status"
-        ]
-        for c in required_cols:
-            if c not in df2.columns:
-                df2[c] = ""
+        df2 = read_sheet_no_cache().copy()
 
-        new_id = 1 if len(df2) == 0 else int(pd.to_numeric(df2["id"], errors="coerce").fillna(0).max()) + 1
+        new_id = 1 if len(df2) == 0 else int(df2["id"].max()) + 1
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        marker = f"TEST幼兒_{datetime.now().strftime('%H%M%S')}"
+
         new_row = {
             "id": new_id,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "student_name": "TEST幼兒",
+            "timestamp": ts,
+            "student_name": marker,
             "gender": "不方便透露",
             "birth_date": "2022-01-01",
             "desired_class": "不確定",
@@ -69,18 +77,27 @@ if st.button("➕ 新增 TEST 資料", use_container_width=True):
             "phone": "0900000000",
             "email": "",
             "address": "",
-            "notes": "這是連線測試資料，可刪",
+            "notes": "加強版連線測試資料，可刪",
             "status": "新送出"
         }
 
         df2 = pd.concat([df2, pd.DataFrame([new_row])], ignore_index=True)
 
-        # ✅ 寫回整張表（簡單穩定）
-        conn.update(worksheet="enrollments", data=df2)
+        # 寫回整張表（最穩）
+        conn.update(worksheet=WORKSHEET, data=df2)
 
-        st.success("✅ 寫入成功！請到 Google 試算表確認最後一列出現 TEST 資料。")
-        st.rerun()
+        st.success(f"✅ 已寫入：{marker}")
+        st.info("等待 2 秒後重新讀取，確認 Google 端也看得到…")
+        time.sleep(2)
+
+        df3 = read_sheet_no_cache()
+        st.subheader("3) 寫入後再讀回確認")
+        st.write("最後 3 筆：")
+        st.dataframe(df3.tail(3), use_container_width=True, hide_index=True)
+
+        # 強提示：請用 Google Sheet 搜尋 marker
+        st.warning(f"請到 Google 試算表用 Ctrl+F 搜尋：{marker}（最準）")
 
     except Exception as e:
-        st.error("❌ 寫入失敗（多半是：沒有把試算表分享給 service account『編輯者』）")
+        st.error("❌ 寫入或回讀失敗")
         st.code(str(e))
