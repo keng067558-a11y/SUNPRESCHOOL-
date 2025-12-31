@@ -2,96 +2,56 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date
 import re
-import time
+import json
 
 # =========================
-# 基本設定（Apple-ish UI）
+# Apple-ish UI
 # =========================
 st.set_page_config(page_title="小太陽｜新生報名系統", page_icon="📝", layout="wide")
 
 st.markdown("""
 <style>
 :root{
-  --bg:#F5F5F7;
-  --card:#FFFFFF;
-  --text:#1D1D1F;
-  --muted:#6E6E73;
-  --line:rgba(0,0,0,0.06);
-  --shadow:0 10px 30px rgba(0,0,0,0.08);
-  --radius:18px;
-  --ok:#16a34a;
-  --warn:#f59e0b;
-  --bad:#ef4444;
+  --bg:#F5F5F7; --card:#fff; --text:#1D1D1F; --muted:#6E6E73;
+  --line:rgba(0,0,0,.06); --shadow:0 10px 30px rgba(0,0,0,.08); --r:18px;
 }
-.stApp{ background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif; }
-.block-container{ padding-top:1.4rem; padding-bottom:2rem; }
-.apple-header{
-  background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.60));
-  border:1px solid var(--line);
-  box-shadow:var(--shadow);
-  border-radius:var(--radius);
-  padding:18px 20px;
-  margin-bottom:16px;
-}
+.stApp{ background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif; }
+.block-container{ padding-top:1.4rem; padding-bottom:2rem; max-width:1100px; }
+.apple-header{ background:linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.60));
+  border:1px solid var(--line); box-shadow:var(--shadow); border-radius:var(--r);
+  padding:18px 20px; margin-bottom:16px; }
 .apple-title{ font-size:1.6rem; font-weight:900; margin:0; letter-spacing:-0.02em; }
-.apple-subtitle{ color:var(--muted); margin-top:6px; font-size:0.95rem; line-height:1.35; }
-.apple-card{
-  background:var(--card);
-  border:1px solid var(--line);
-  border-radius:var(--radius);
-  box-shadow:var(--shadow);
-  padding:16px 18px;
-  margin-bottom:16px;
-}
-.small-muted{ color:var(--muted); font-size:0.9rem; }
-.badge{
-  display:inline-block;
-  padding:4px 10px;
-  border-radius:999px;
-  font-size:0.85rem;
-  border:1px solid var(--line);
-  background:rgba(0,0,0,0.03);
-  margin-left:6px;
-}
-div[data-testid="stMetric"]{
-  background:var(--card);
-  border:1px solid var(--line);
-  border-radius:16px;
-  box-shadow:var(--shadow);
-  padding:12px 14px;
-}
-.stButton > button{
-  border-radius:14px;
-  padding:10px 14px;
-  border:1px solid var(--line);
-  background:#111;
-  color:#fff;
-  font-weight:800;
-}
-.stButton > button:hover{ opacity:0.92; }
+.apple-sub{ color:var(--muted); margin-top:6px; font-size:.95rem; line-height:1.35; }
+.apple-card{ background:var(--card); border:1px solid var(--line); border-radius:var(--r);
+  box-shadow:var(--shadow); padding:16px 18px; margin-bottom:16px; }
+.small{ color:var(--muted); font-size:.9rem; }
+.badge{ display:inline-block; padding:4px 10px; border-radius:999px; font-size:.85rem;
+  border:1px solid var(--line); background:rgba(0,0,0,.03); margin-left:6px; }
+.stButton>button{ border-radius:14px; padding:10px 14px; background:#111; color:#fff;
+  border:1px solid var(--line); font-weight:800; }
+.stButton>button:hover{ opacity:.92; }
 div[data-testid="stTextInput"] input,
 div[data-testid="stTextArea"] textarea,
 div[data-testid="stDateInput"] input,
 div[data-testid="stSelectbox"] > div,
-div[data-testid="stNumberInput"] input{
-  border-radius:14px !important;
-}
+div[data-testid="stNumberInput"] input{ border-radius:14px !important; }
 hr{ border:none; border-top:1px solid var(--line); margin:10px 0 18px; }
-code{ background:rgba(0,0,0,0.04); padding:2px 6px; border-radius:8px; }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
 <div class="apple-header">
-  <div class="apple-title">📝 小太陽｜新生報名系統 <span class="badge">Google 試算表資料庫</span></div>
-  <div class="apple-subtitle">家長填表 → 立即寫入 Google 試算表（enrollments）→ 後台可查詢、更新狀態、匯出</div>
+  <div class="apple-title">📝 小太陽｜新生報名系統 <span class="badge">Google 試算表</span></div>
+  <div class="apple-sub">家長填表 → 立即寫入 Google 試算表（enrollments）→ 後台查詢、更新狀態、匯出</div>
 </div>
 """, unsafe_allow_html=True)
 
 # =========================
-# Google Sheets 連線設定
+# 你的試算表設定（固定）
 # =========================
-WORKSHEET = "enrollments"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit"
+WORKSHEET_NAME = "enrollments"
 
 COLUMNS = [
     "id","timestamp",
@@ -105,10 +65,10 @@ COLUMNS = [
 DEFAULT_STATUS = "新送出"
 STATUS_OPTIONS = ["新送出","已聯繫","已參觀","已錄取","候補","未錄取"]
 
-def now_str() -> str:
+def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def month_str(d: date) -> str:
+def month_str(d: date):
     return d.strftime("%Y-%m")
 
 def normalize_phone(s: str) -> str:
@@ -116,7 +76,7 @@ def normalize_phone(s: str) -> str:
     s = re.sub(r"[^\d+]", "", s)
     return s
 
-def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+def ensure_df(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=COLUMNS)
     for c in COLUMNS:
@@ -124,42 +84,64 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
             df[c] = ""
     df = df[COLUMNS]
     df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(0).astype(int)
-    df["timestamp"] = df["timestamp"].astype(str)
-    df["student_name"] = df["student_name"].astype(str)
-    df["guardian_name"] = df["guardian_name"].astype(str)
-    df["phone"] = df["phone"].astype(str)
     df["status"] = df["status"].fillna(DEFAULT_STATUS).astype(str)
     return df
 
-# streamlit-gsheets 連線
-try:
-    from streamlit_gsheets import GSheetsConnection
-except Exception:
-    st.error("缺少套件 streamlit-gsheets。請確認 requirements.txt 有：streamlit-gsheets==0.1.0")
-    st.stop()
-
+# =========================
+# Google Sheets：gspread 連線（不用 streamlit-gsheets）
+# Secrets 需放：GOOGLE_SERVICE_ACCOUNT_JSON
+# =========================
 @st.cache_resource
-def get_conn():
-    return st.connection("gsheets", type=GSheetsConnection)
+def get_gspread_client():
+    import gspread
+    from google.oauth2.service_account import Credentials
 
-conn = get_conn()
+    if "GOOGLE_SERVICE_ACCOUNT_JSON" not in st.secrets:
+        raise RuntimeError("找不到 Secrets：GOOGLE_SERVICE_ACCOUNT_JSON。請到 Streamlit Secrets 貼上 service account JSON。")
+
+    sa = st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]
+    # 允許你把 JSON 整份貼成字串或 dict
+    if isinstance(sa, str):
+        sa_info = json.loads(sa)
+    else:
+        sa_info = dict(sa)
+
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
+    return gspread.authorize(creds)
+
+def open_sheet():
+    gc = get_gspread_client()
+    sh = gc.open_by_url(SPREADSHEET_URL)
+    ws = sh.worksheet(WORKSHEET_NAME)
+    return ws
 
 def read_sheet() -> pd.DataFrame:
-    df = conn.read(worksheet=WORKSHEET)
-    return ensure_columns(df)
+    ws = open_sheet()
+    values = ws.get_all_values()
+    if not values:
+        return pd.DataFrame(columns=COLUMNS)
+    header = values[0]
+    rows = values[1:]
+    df = pd.DataFrame(rows, columns=header)
+    return ensure_df(df)
 
 def write_sheet(df: pd.DataFrame):
-    df = ensure_columns(df)
-    conn.update(worksheet=WORKSHEET, data=df)
+    ws = open_sheet()
+    df = ensure_df(df)
 
-def next_id(df: pd.DataFrame) -> int:
-    if len(df) == 0:
-        return 1
-    return int(df["id"].max()) + 1
+    # 先寫 header，再寫資料
+    data = [COLUMNS] + df.astype(str).values.tolist()
+    ws.clear()
+    ws.update("A1", data)
 
 def append_row(row: dict):
     df = read_sheet()
-    row["id"] = next_id(df)
+    new_id = 1 if len(df) == 0 else int(df["id"].max()) + 1
+    row["id"] = new_id
     df2 = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     write_sheet(df2)
 
@@ -169,12 +151,12 @@ def append_row(row: dict):
 tab1, tab2, tab3 = st.tabs(["📝 新生報名", "🗂️ 後台查詢", "⚙️ 系統測試"])
 
 # =========================
-# Tab 1：新生報名（家長）
+# Tab 1：新生報名
 # =========================
 with tab1:
     st.markdown('<div class="apple-card">', unsafe_allow_html=True)
     st.markdown("### 📝 新生報名表單")
-    st.markdown('<div class="small-muted">送出後會立刻寫入 Google 試算表的 <b>enrollments</b> 分頁。</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small">送出後會立刻寫入 Google 試算表的 <b>enrollments</b> 分頁。</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     with st.form("enroll_form", clear_on_submit=True):
@@ -246,26 +228,25 @@ with tab1:
                 append_row(row)
                 st.success("✅ 已完成報名送出！我們會盡快與您聯繫。")
             except Exception as e:
-                st.error("❌ 寫入 Google 試算表失敗（通常是權限或 Secrets 設定）")
+                st.error("❌ 寫入失敗（通常是試算表沒分享給 service account 編輯者 / Secrets 設定錯）")
                 st.code(str(e))
 
 # =========================
-# Tab 2：後台查詢（管理者）
+# Tab 2：後台查詢
 # =========================
 with tab2:
     st.markdown('<div class="apple-card">', unsafe_allow_html=True)
     st.markdown("### 🗂️ 後台查詢與狀態管理")
-    st.markdown('<div class="small-muted">可依狀態/班別/入學月份/關鍵字篩選，並可更新狀態。</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small">可依狀態/班別/入學月份/關鍵字篩選，並可更新狀態。</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     try:
         df = read_sheet()
     except Exception as e:
-        st.error("❌ 讀取 Google 試算表失敗")
+        st.error("❌ 讀取失敗（請先完成 Secrets + 分享權限）")
         st.code(str(e))
         st.stop()
 
-    # 篩選區
     c1, c2, c3, c4 = st.columns([1, 1, 1.1, 1.6])
     with c1:
         status_filter = st.selectbox("狀態", ["全部"] + STATUS_OPTIONS)
@@ -293,11 +274,9 @@ with tab2:
                 filtered["notes"].astype(str).str.contains(k, na=False)
             ]
 
-    # KPI
     k1, k2, k3 = st.columns(3)
     k1.metric("篩選後筆數", f"{len(filtered)}")
     k2.metric("不重複幼兒數", f"{filtered['student_name'].nunique() if len(filtered) else 0}")
-    # 入學月份分布（簡化顯示）
     top_month = "-"
     if len(filtered) and filtered["start_month"].astype(str).str.len().gt(0).any():
         top_month = filtered["start_month"].value_counts().index[0]
@@ -308,13 +287,11 @@ with tab2:
     st.dataframe(show_df, use_container_width=True, hide_index=True)
 
     st.subheader("✏️ 更新狀態（單筆）")
-    st.caption("選一筆 id，更新其 status。更新後會寫回 Google 試算表。")
-
     u1, u2, u3 = st.columns([1, 1.2, 1.2])
     with u1:
         target_id = st.number_input("要更新的 id", min_value=0, step=1, value=0)
     with u2:
-        new_status = st.selectbox("新狀態", STATUS_OPTIONS, index=1)  # 預設已聯繫
+        new_status = st.selectbox("新狀態", STATUS_OPTIONS, index=1)
     with u3:
         do_update = st.button("✅ 寫入更新", use_container_width=True)
 
@@ -341,29 +318,15 @@ with tab2:
     st.download_button("下載目前篩選結果 CSV", data=csv_bytes, file_name="enrollments_filtered.csv", mime="text/csv")
 
 # =========================
-# Tab 3：系統測試（確認讀寫正常）
+# Tab 3：系統測試
 # =========================
 with tab3:
     st.markdown('<div class="apple-card">', unsafe_allow_html=True)
     st.markdown("### ⚙️ 系統測試（讀寫確認）")
-    st.markdown('<div class="small-muted">用來確認：你現在的 Secrets / 權限 / 分頁欄位都正確。</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small">按下按鈕會寫入一筆 TEST_時間碼，並可在 Google 表用 Ctrl+F 找到。</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.subheader("1) 重新讀取")
-    if st.button("🔄 重新讀取 enrollments", use_container_width=True):
-        st.session_state["_refresh"] = str(time.time())
-
-    try:
-        df_test = read_sheet()
-        st.success(f"✅ 讀取成功｜筆數：{len(df_test)}")
-        st.dataframe(df_test.tail(10), use_container_width=True, hide_index=True)
-    except Exception as e:
-        st.error("❌ 讀取失敗")
-        st.code(str(e))
-        st.stop()
-
-    st.subheader("2) 寫入一筆測試資料（可刪）")
-    if st.button("➕ 新增 TEST 資料", use_container_width=True):
+    if st.button("➕ 寫入 TEST 資料", use_container_width=True):
         marker = f"TEST_{datetime.now().strftime('%H%M%S')}"
         row = {
             "timestamp": now_str(),
@@ -382,9 +345,7 @@ with tab3:
         }
         try:
             append_row(row)
-            st.success(f"✅ 已寫入：{marker}。請到 Google 試算表用 Ctrl+F 搜尋它。")
-            time.sleep(1)
-            st.rerun()
+            st.success(f"✅ 已寫入：{marker}。請到 Google 試算表（enrollments）用 Ctrl+F 搜尋它。")
         except Exception as e:
-            st.error("❌ 寫入失敗（通常是沒給 service account 編輯權限）")
+            st.error("❌ 寫入失敗（通常是沒分享試算表給 service account 編輯者 / Secrets 放錯）")
             st.code(str(e))
