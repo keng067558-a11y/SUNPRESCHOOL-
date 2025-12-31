@@ -266,13 +266,13 @@ def badge_for_importance(v: str) -> str:
         return "badge badge-ok"
     return "badge"
 
-# ✅ 關鍵修正：除了 < > 轉義，也把 ` 反引號轉掉，避免 Markdown 變 code block
+# ✅ 防 Markdown code block：把 ` 也轉掉
 def safe_text(v) -> str:
     s = "" if v is None else str(v)
     s = s.replace("\r\n", "\n").replace("\r", "\n")
-    s = html_escape(s)                 # 轉義 < > & "
-    s = s.replace("`", "&#96;")        # ← 這行是重點：消掉 ``` 的破壞力
-    return s.replace("\n", "<br>")     # 換行顯示
+    s = html_escape(s)
+    s = s.replace("`", "&#96;")
+    return s.replace("\n", "<br>")
 
 def guess_class_from_enroll_info(info: str) -> str:
     t = (info or "").strip()
@@ -351,6 +351,7 @@ tab_enroll, tab_placeholder = st.tabs(["新生登記", "（其他模組）"])
 with tab_enroll:
     t_form, t_list = st.tabs(["表單", "名單"])
 
+    # ---------- 表單 ----------
     with t_form:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 新生登記")
@@ -377,7 +378,7 @@ with tab_enroll:
             with g:
                 child_bday = st.date_input("幼兒生日 *", value=date(2022, 1, 1))
 
-            enroll_info = st.text_input("預計入學資訊（可寫：幼幼/小班/中班/大班）", placeholder="例如：115小班／2026-09")
+            # ✅ 已移除：預計入學資訊（表單不需要）
             referrer = st.text_input("推薦人", placeholder="選填")
             notes = st.text_area("備註", placeholder="選填")
 
@@ -407,7 +408,10 @@ with tab_enroll:
                 row["家長稱呼"] = parent_title.strip()
                 row["電話"] = phone_clean
                 row["幼兒生日"] = str(child_bday)
-                row["預計入學資訊"] = (enroll_info or "").strip()
+
+                # ✅ 仍保留欄位，但寫入空白（不影響你 Excel 欄位）
+                row["預計入學資訊"] = ""
+
                 row["推薦人"] = (referrer or "").strip()
                 row["備註"] = (notes or "").strip()
                 row["重要性"] = importance
@@ -419,10 +423,10 @@ with tab_enroll:
                     st.error("寫入失敗")
                     st.code(str(e))
 
+    # ---------- 名單 ----------
     with t_list:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 名單整理")
-        st.markdown('<div class="small">已修正：某些資料含 ``` / ` 時，卡片不會再被 Markdown 變成程式碼區塊</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         try:
@@ -447,17 +451,17 @@ with tab_enroll:
                 if len(data) == 0:
                     st.info("目前沒有未聯繫資料")
                 else:
-                    render_cards(data, "聯繫狀態＝未聯繫（再依年齡段分區）")
+                    render_cards(data)
 
             with v2:
                 data = tmp[tmp["聯繫狀態"].astype(str).fillna("") != "未聯繫"].copy()
                 if len(data) == 0:
                     st.info("目前沒有已聯繫資料")
                 else:
-                    render_cards(data, "聯繫狀態≠未聯繫（再依年齡段分區）")
+                    render_cards(data)
 
             with v3:
-                st.caption("依『預計入學資訊』推估分班（幼幼/小班/中班/大班）。之後你加正式欄位，我再改成 100% 準確。")
+                st.caption("依『預計入學資訊』推估分班（幼幼/小班/中班/大班）。目前你表單沒填此欄，會多數顯示未設定。")
                 class_order = ["幼幼", "小班", "中班", "大班", "未設定"]
                 for lv in class_order:
                     g = tmp[tmp["預計班別"] == lv].copy()
@@ -505,5 +509,4 @@ with tab_enroll:
 with tab_placeholder:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 其他模組")
-    st.markdown('<div class="small">之後你要加：在園生名單、收費、出缺勤、班級管理…都放這裡。</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
