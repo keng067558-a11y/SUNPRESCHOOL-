@@ -92,28 +92,37 @@ def fetch_data():
         client = get_gspread_client()
         sheet = client.open_by_key(GSHEET_ID).get_sheets()[0]
         
-        # 讀取所有資料列，排除空行並檢查表頭
+        # 讀取所有資料，包含檢查標題是否存在
         all_vals = sheet.get_all_values()
         
-        if not all_vals or len(all_vals) <= 1:
-            # 如果 Excel 完全沒標題，或只有標題沒內容
-            if not all_vals:
-                sheet.update(range_name='A1', values=[HEADERS])
+        if not all_vals or len(all_vals) == 0:
+            # 完全空的 Excel
+            sheet.update(range_name='A1', values=[HEADERS])
             return pd.DataFrame(columns=HEADERS), sheet
         
-        # 使用第一列作為 header
-        data = sheet.get_all_records(head=1)
+        if len(all_vals) == 1:
+            # 只有標題沒有數據
+            df = pd.DataFrame(columns=HEADERS)
+            # 確保現有標題正確
+            if all_vals[0] != HEADERS:
+                sheet.update(range_name='A1', values=[HEADERS])
+            return df, sheet
+        
+        # 正常讀取數據
+        data = sheet.get_all_records()
         df = pd.DataFrame(data)
         
-        # 檢查欄位是否缺失，若缺失則補齊
+        # 補齊可能缺失的欄位
         for h in HEADERS:
             if h not in df.columns:
                 df[h] = ""
         
-        return df[HEADERS], sheet
+        # 確保順序
+        df = df[HEADERS]
+        return df, sheet
     except Exception as e:
         st.error(f"⚠️ 雲端連線失敗。請確認是否已將試算表「共用」給：{GOOGLE_JSON_KEY['client_email']}")
-        st.exception(e) # 顯示詳細錯誤資訊以供診斷
+        st.error(f"錯誤詳情: {str(e)}")
         return pd.DataFrame(), None
 
 # ==========================================
@@ -139,6 +148,7 @@ def calculate_grade_info(birthday_str):
 # 3. 主介面 UI
 # ==========================================
 def main():
+    # 確保資料更新
     df, sheet = fetch_data()
     
     # 頂部導覽列
@@ -169,6 +179,7 @@ def main():
     
     display_df = df.copy()
     if search and not df.empty:
+        # 強制轉為字串搜尋避免報錯
         mask = display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)
         display_df = display_df[mask]
 
@@ -197,14 +208,15 @@ def main():
         if st.button("💾 儲存所有變更並更新 Excel", type="primary"):
             try:
                 with st.spinner("正在同步至雲端..."):
-                    # 將 NaN 轉為空字串，防止寫入報錯
-                    final_data = updated_df.fillna("").astype(str)
+                    # 將 NaN 轉為空字串並確保為純文字列表
+                    final_df = updated_df.fillna("").astype(str)
                     sheet.clear()
                     # 重新寫入標題與數據
-                    data_to_save = [final_data.columns.values.tolist()] + final_data.values.tolist()
+                    data_to_save = [HEADERS] + final_df.values.tolist()
                     sheet.update(range_name='A1', values=data_to_save, value_input_option='USER_ENTERED')
                     st.success("✅ Excel 同步成功！")
                     time.sleep(1)
+                    st.cache_resource.clear() # 清除連線快取
                     st.rerun()
             except Exception as e:
                 st.error("同步失敗，請檢查網路或 Excel 權限。")
@@ -247,6 +259,7 @@ def main():
                             sheet.append_row(new_row, value_input_option='USER_ENTERED')
                             st.success(f"🎉 {n_name if n_name else '資料'} 錄入成功！")
                             time.sleep(1)
+                            st.cache_resource.clear()
                             st.rerun()
                     except Exception as e:
                         st.error("寫入失敗")
