@@ -92,36 +92,33 @@ def fetch_data():
         client = get_gspread_client()
         sheet = client.open_by_key(GSHEET_ID).get_sheets()[0]
         
-        # 讀取所有資料，包含檢查標題是否存在
+        # 讀取所有資料 (使用 values() 避免 mapping 錯誤)
         all_vals = sheet.get_all_values()
         
         if not all_vals or len(all_vals) == 0:
-            # 完全空的 Excel
+            # 建立標題列
             sheet.update(range_name='A1', values=[HEADERS])
             return pd.DataFrame(columns=HEADERS), sheet
         
-        if len(all_vals) == 1:
-            # 只有標題沒有數據
-            df = pd.DataFrame(columns=HEADERS)
-            # 確保現有標題正確
-            if all_vals[0] != HEADERS:
-                sheet.update(range_name='A1', values=[HEADERS])
-            return df, sheet
+        # 標題列
+        header_row = all_vals[0]
+        # 資料列 (排除空列)
+        rows = [r for r in all_vals[1:] if any(cell.strip() for cell in r)]
         
-        # 正常讀取數據
-        data = sheet.get_all_records()
-        df = pd.DataFrame(data)
+        if not rows:
+            return pd.DataFrame(columns=HEADERS), sheet
+            
+        # 轉換為 DataFrame
+        df = pd.DataFrame(rows, columns=header_row)
         
-        # 補齊可能缺失的欄位
+        # 補齊缺失欄位並過濾多餘欄位
         for h in HEADERS:
             if h not in df.columns:
                 df[h] = ""
         
-        # 確保順序
-        df = df[HEADERS]
-        return df, sheet
+        return df[HEADERS], sheet
     except Exception as e:
-        st.error(f"⚠️ 雲端連線失敗。請確認是否已將試算表「共用」給：{GOOGLE_JSON_KEY['client_email']}")
+        st.error(f"⚠️ 雲端讀取錯誤。請確認 Excel 分享給：{GOOGLE_JSON_KEY['client_email']}")
         st.error(f"錯誤詳情: {str(e)}")
         return pd.DataFrame(), None
 
@@ -135,6 +132,7 @@ def calculate_grade_info(birthday_str):
         roc_year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
         ce_year = roc_year + 1911
         today = date.today()
+        # 決定目標學年度 (以開學日 9/1 為準)
         target_year = today.year if today.month < 9 else today.year + 1
         age = target_year - ce_year
         if month > 9 or (month == 9 and day >= 2): age -= 1
@@ -148,14 +146,14 @@ def calculate_grade_info(birthday_str):
 # 3. 主介面 UI
 # ==========================================
 def main():
-    # 確保資料更新
+    # 載入最新資料
     df, sheet = fetch_data()
     
     # 頂部導覽列
     t1, t2 = st.columns([5, 1])
     with t1:
         st.title("🏫 幼兒園招生雲端管理系統")
-        st.caption("✅ 雲端同步模式 (10欄穩定對齊版)")
+        st.caption("✅ 雲端同步模式 (10欄最終穩定對齊版)")
     with t2:
         if st.button("🔄 刷新名單", use_container_width=True): 
             st.cache_resource.clear()
@@ -179,8 +177,8 @@ def main():
     
     display_df = df.copy()
     if search and not df.empty:
-        # 強制轉為字串搜尋避免報錯
-        mask = display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)
+        # 將所有資料轉為字串搜尋避免報錯
+        mask = display_df.apply(lambda row: row.astype(str).str.contains(search, case=False).any(), axis=1)
         display_df = display_df[mask]
 
     # C. 名單清單與編輯
@@ -207,20 +205,20 @@ def main():
         # 儲存同步按鈕
         if st.button("💾 儲存所有變更並更新 Excel", type="primary"):
             try:
-                with st.spinner("正在同步至雲端..."):
-                    # 將 NaN 轉為空字串並確保為純文字列表
+                with st.spinner("同步至雲端中..."):
+                    # 將 NaN 轉為空字串並確保為純文字
                     final_df = updated_df.fillna("").astype(str)
+                    # 清除原表 (包含表頭下方)
                     sheet.clear()
                     # 重新寫入標題與數據
                     data_to_save = [HEADERS] + final_df.values.tolist()
                     sheet.update(range_name='A1', values=data_to_save, value_input_option='USER_ENTERED')
                     st.success("✅ Excel 同步成功！")
                     time.sleep(1)
-                    st.cache_resource.clear() # 清除連線快取
+                    st.cache_resource.clear()
                     st.rerun()
             except Exception as e:
-                st.error("同步失敗，請檢查網路或 Excel 權限。")
-                st.exception(e)
+                st.error(f"同步失敗，錯誤詳情: {str(e)}")
     elif not df.empty:
         st.info("目前尚無符合搜尋條件的資料數據。")
 
@@ -240,18 +238,18 @@ def main():
                     # 自動推算入學資訊
                     entry_info = calculate_grade_info(n_birth)
                     
-                    # 建立新資料列，填滿 10 欄
+                    # 建立新資料列，填滿 10 欄 (字串化處理避免 Excel 格式錯誤)
                     new_row = [
-                        "排隊等待",           # 報名狀態
-                        "未聯繫",            # 聯繫狀態
-                        date.today().strftime("%Y/%m/%d"), # 登記日期
-                        n_name,
-                        n_parent,
-                        n_phone,
-                        n_birth,
-                        entry_info,         # 預計入學資訊
-                        n_note,             # 備註
-                        n_prio              # 重要性
+                        "排隊等待", 
+                        "未聯繫", 
+                        date.today().strftime("%Y/%m/%d"), 
+                        str(n_name),
+                        str(n_parent),
+                        str(n_phone),
+                        str(n_birth),
+                        str(entry_info),
+                        str(n_note),
+                        str(n_prio)
                     ]
                     
                     try:
@@ -262,10 +260,9 @@ def main():
                             st.cache_resource.clear()
                             st.rerun()
                     except Exception as e:
-                        st.error("寫入失敗")
-                        st.exception(e)
+                        st.error(f"寫入失敗: {str(e)}")
                 else:
-                    if not sheet: st.error("連線未建立，無法儲存")
+                    if not sheet: st.error("雲端連線未建立")
                     else: st.error("「電話」為必填項。")
 
         st.divider()
