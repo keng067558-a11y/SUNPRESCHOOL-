@@ -47,7 +47,7 @@ st.markdown("""
         box-shadow: 0 4px 15px rgba(0,0,0,0.03);
     }
 
-    /* 側邊欄背景 */
+    /* 側邊欄 */
     [data-testid="stSidebar"] {
         background-color: white;
     }
@@ -55,12 +55,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. 雲端連線配置 (精準對齊 10 欄結構)
+# 1. 雲端連線配置 (精準對齊您的 11 欄標題)
 # ==========================================
 
 GSHEET_ID = "1ZofZnB8Btig_6XvsHGh7bbapnfJM-vDkXTFpaU7ngmE"
 
-# 服務帳號金鑰 (已嵌入您的授權資訊)
+# 服務帳號金鑰 (已嵌入您的專屬授權)
 GOOGLE_JSON_KEY = {
   "type": "service_account",
   "project_id": "gen-lang-client-0350949155",
@@ -75,10 +75,10 @@ GOOGLE_JSON_KEY = {
   "universe_domain": "googleapis.com"
 }
 
-# 嚴格 10 欄標題
+# 嚴格遵循您 Excel 的 11 個標題順序
 HEADERS = [
     "報名狀態", "聯繫狀態", "登記日期", "幼兒姓名", "家長稱呼", 
-    "電話", "幼兒生日", "預計入學資訊", "備註", "重要性"
+    "電話", "幼兒生日", "預計入學資訊", "推薦人", "備註", "重要性"
 ]
 
 @st.cache_resource
@@ -92,38 +92,30 @@ def fetch_data():
         client = get_gspread_client()
         sheet = client.open_by_key(GSHEET_ID).get_sheets()[0]
         
-        # 讀取所有資料 (使用 values() 避免 mapping 錯誤)
+        # 讀取所有資料
         all_vals = sheet.get_all_values()
         
         if not all_vals or len(all_vals) == 0:
-            # 建立標題列
+            # 初始化標題
             sheet.update(range_name='A1', values=[HEADERS])
             return pd.DataFrame(columns=HEADERS), sheet
         
-        # 標題列
-        header_row = all_vals[0]
-        # 資料列 (排除空列)
-        rows = [r for r in all_vals[1:] if any(cell.strip() for cell in r)]
+        # 使用第一列作為 Header
+        df = pd.DataFrame(all_vals[1:], columns=all_vals[0])
         
-        if not rows:
-            return pd.DataFrame(columns=HEADERS), sheet
-            
-        # 轉換為 DataFrame
-        df = pd.DataFrame(rows, columns=header_row)
-        
-        # 補齊缺失欄位並過濾多餘欄位
+        # 補齊缺失欄位
         for h in HEADERS:
             if h not in df.columns:
                 df[h] = ""
         
+        # 確保回傳的 DataFrame 順序與 HEADERS 完全一致
         return df[HEADERS], sheet
     except Exception as e:
-        st.error(f"⚠️ 雲端讀取錯誤。請確認 Excel 分享給：{GOOGLE_JSON_KEY['client_email']}")
-        st.error(f"錯誤詳情: {str(e)}")
+        st.error(f"雲端連線異常：{e}")
         return pd.DataFrame(), None
 
 # ==========================================
-# 2. 班別計算邏輯 (台灣 9/1 學制)
+# 2. 自動推算班別邏輯
 # ==========================================
 def calculate_grade_info(birthday_str):
     if not birthday_str or "/" not in str(birthday_str): return ""
@@ -132,7 +124,6 @@ def calculate_grade_info(birthday_str):
         roc_year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
         ce_year = roc_year + 1911
         today = date.today()
-        # 決定目標學年度 (以開學日 9/1 為準)
         target_year = today.year if today.month < 9 else today.year + 1
         age = target_year - ce_year
         if month > 9 or (month == 9 and day >= 2): age -= 1
@@ -146,46 +137,45 @@ def calculate_grade_info(birthday_str):
 # 3. 主介面 UI
 # ==========================================
 def main():
-    # 載入最新資料
+    # 讀取資料
     df, sheet = fetch_data()
     
-    # 頂部導覽列
+    # Header
     t1, t2 = st.columns([5, 1])
     with t1:
-        st.title("🏫 幼兒園招生雲端管理系統")
-        st.caption("✅ 雲端同步模式 (10欄最終穩定對齊版)")
+        st.title("🏫 幼兒園雲端招生管理系統")
+        st.caption("✅ 已完全對齊您的 11 欄位結構 (含推薦人、備註分開處理)")
     with t2:
         if st.button("🔄 刷新名單", use_container_width=True): 
             st.cache_resource.clear()
             st.rerun()
 
     if df.empty and sheet is not None:
-        st.info("👋 歡迎！目前名單是空的，請從側邊欄錄入第一筆新生資料。")
+        st.info("👋 歡迎！目前 Excel 名單是空的，請從側邊欄錄入資料。")
 
-    # A. 數據統計看板
+    # 數據統計
     if not df.empty:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("總登記人數", len(df))
         m2.metric("待聯繫名單", len(df[df["聯繫狀態"] == '未聯繫']) if "聯繫狀態" in df.columns else 0)
-        m3.metric("排隊等待中", len(df[df["報名狀態"] == '排隊等待']) if "報名狀態" in df.columns else 0)
-        m4.metric("連線狀態", "連線正常")
+        m3.metric("排隊中", len(df[df["報名狀態"] == '排隊等待']) if "報名狀態" in df.columns else 0)
+        m4.metric("系統狀態", "雲端同步正常")
 
     st.divider()
 
-    # B. 搜尋篩選區
-    search = st.text_input("🔍 搜尋孩子姓名、電話或備註內容", placeholder="輸入關鍵字...")
+    # 搜尋與篩選
+    search = st.text_input("🔍 搜尋孩子姓名、電話、推薦人或備註", placeholder="輸入搜尋內容...")
     
     display_df = df.copy()
-    if search and not df.empty:
-        # 將所有資料轉為字串搜尋避免報錯
-        mask = display_df.apply(lambda row: row.astype(str).str.contains(search, case=False).any(), axis=1)
+    if search:
+        mask = display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)
         display_df = display_df[mask]
 
-    # C. 名單清單與編輯
+    # 名單清單與編輯區
     if not display_df.empty:
-        st.subheader("📋 招生名單明細 (直接編輯內容)")
+        st.subheader("📋 招生名單明細 (可直接編輯)")
         
-        # 表格編輯器
+        # 表格編輯器配置
         updated_df = st.data_editor(
             display_df,
             use_container_width=True,
@@ -193,43 +183,43 @@ def main():
             num_rows="dynamic",
             column_config={
                 "報名狀態": st.column_config.SelectboxColumn("報名狀態", options=["排隊等待", "已入學", "取消報名", "候補中"]),
-                "聯繫狀態": st.column_config.SelectboxColumn("聯繫狀態", options=["未聯繫", "聯繫中", "已聯繫", "電話未接"]),
+                "聯繫狀態": st.column_config.SelectboxColumn("聯繫進度", options=["未聯繫", "聯繫中", "已聯繫", "電話未接"]),
                 "幼兒姓名": st.column_config.TextColumn("幼兒姓名", required=True),
-                "重要性": st.column_config.SelectboxColumn("重要性", options=["高", "中", "低"]),
+                "推薦人": st.column_config.TextColumn("推薦人"),
                 "備註": st.column_config.TextColumn("備註內容", width="large"),
-                "預計入學資訊": st.column_config.TextColumn("系統推算結果", disabled=True),
+                "重要性": st.column_config.SelectboxColumn("重要性", options=["高", "中", "低"]),
+                "預計入學資訊": st.column_config.TextColumn("預計分班", disabled=True),
                 "登記日期": st.column_config.TextColumn("登記日期", disabled=True)
             }
         )
         
-        # 儲存同步按鈕
-        if st.button("💾 儲存所有變更並更新 Excel", type="primary"):
+        # 儲存按鈕
+        if st.button("💾 儲存所有變更至雲端 Excel", type="primary"):
             try:
-                with st.spinner("同步至雲端中..."):
-                    # 將 NaN 轉為空字串並確保為純文字
-                    final_df = updated_df.fillna("").astype(str)
-                    # 清除原表 (包含表頭下方)
+                with st.spinner("正在同步..."):
+                    # 將資料轉為純字串列表寫回，避免格式報錯
+                    final_data = updated_df.fillna("").astype(str)
                     sheet.clear()
                     # 重新寫入標題與數據
-                    data_to_save = [HEADERS] + final_df.values.tolist()
+                    data_to_save = [HEADERS] + final_data.values.tolist()
                     sheet.update(range_name='A1', values=data_to_save, value_input_option='USER_ENTERED')
-                    st.success("✅ Excel 同步成功！")
+                    st.success("✅ 同步成功！Excel 資料已更新。")
                     time.sleep(1)
-                    st.cache_resource.clear()
                     st.rerun()
             except Exception as e:
-                st.error(f"同步失敗，錯誤詳情: {str(e)}")
-    elif not df.empty:
-        st.info("目前尚無符合搜尋條件的資料數據。")
+                st.error(f"儲存失敗：{e}")
+    else:
+        st.info("目前無符合搜尋條件的數據。")
 
-    # D. 側邊欄：新增登記功能
+    # 側邊欄：錄入功能
     with st.sidebar:
-        st.header("✨ 錄入新名單")
+        st.header("✨ 新增招生紀錄")
         with st.form("add_form", clear_on_submit=True):
-            n_name = st.text_input("幼兒姓名")
+            n_name = st.text_input("孩子姓名")
             n_parent = st.text_input("家長稱呼 (例：林媽媽)")
-            n_phone = st.text_input("聯絡電話*")
-            n_birth = st.text_input("幼兒生日 (例 110/05/20)")
+            n_phone = st.text_input("電話*")
+            n_birth = st.text_input("生日 (例 110/05/20)")
+            n_ref = st.text_input("推薦人")
             n_prio = st.selectbox("重要性", ["中", "高", "低"])
             n_note = st.text_area("詳細備註")
             
@@ -238,32 +228,32 @@ def main():
                     # 自動推算入學資訊
                     entry_info = calculate_grade_info(n_birth)
                     
-                    # 建立新資料列，填滿 10 欄 (字串化處理避免 Excel 格式錯誤)
+                    # 依照 HEADERS 11 個欄位的嚴格順序建立資料列
                     new_row = [
-                        "排隊等待", 
-                        "未聯繫", 
-                        date.today().strftime("%Y/%m/%d"), 
-                        str(n_name),
-                        str(n_parent),
-                        str(n_phone),
-                        str(n_birth),
-                        str(entry_info),
-                        str(n_note),
-                        str(n_prio)
+                        "排隊等待",           # 報名狀態
+                        "未聯繫",            # 聯繫狀態
+                        date.today().strftime("%Y/%m/%d"), # 登記日期
+                        n_name,
+                        n_parent,
+                        n_phone,
+                        n_birth,
+                        entry_info,         # 預計入學資訊
+                        n_ref,              # 推薦人
+                        n_note,             # 備註
+                        n_prio              # 重要性
                     ]
                     
                     try:
-                        with st.spinner("正在寫入雲端..."):
+                        with st.spinner("正在寫入..."):
                             sheet.append_row(new_row, value_input_option='USER_ENTERED')
-                            st.success(f"🎉 {n_name if n_name else '資料'} 錄入成功！")
+                            st.success(f"🎉 {n_name if n_name else '新名單'} 已錄入成功")
                             time.sleep(1)
-                            st.cache_resource.clear()
                             st.rerun()
                     except Exception as e:
-                        st.error(f"寫入失敗: {str(e)}")
+                        st.error(f"寫入失敗：{e}")
                 else:
-                    if not sheet: st.error("雲端連線未建立")
-                    else: st.error("「電話」為必填項。")
+                    if not sheet: st.error("雲端未連線")
+                    else: st.error("電話為必填項。")
 
         st.divider()
         st.caption(f"📍 連動 ID：{GSHEET_ID[:10]}...")
