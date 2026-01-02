@@ -1,589 +1,228 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
-import re
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime, date
 import json
-from html import escape as html_escape
+import time
 
-# =========================
-# 0) 基本設定
-# =========================
-st.set_page_config(
-    page_title="小太陽｜幼兒園管理系統",
-    page_icon="🏫",
-    layout="wide"
-)
+# ==========================================
+# 0. 系統介面美化 (Apple 極簡風)
+# ==========================================
+st.set_page_config(page_title="幼兒園招生雲端管理", page_icon="🏫", layout="wide")
 
-# =========================
-# 1) Apple 風格 UI + 對齊卡片 CSS
-# =========================
 st.markdown("""
 <style>
-:root{
-  --bg:#F5F5F7; --card:#FFFFFF; --text:#1D1D1F; --muted:#6E6E73;
-  --line:rgba(0,0,0,0.06); --shadow:0 10px 30px rgba(0,0,0,0.08); --r:18px;
-}
-.stApp{
-  background:var(--bg);
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;
-}
-.block-container{ max-width:1180px; padding-top:1.1rem; padding-bottom:2rem; }
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
+    .main { background-color: #F2F2F7; }
+    html, body, [class*="css"] { 
+        font-family: -apple-system, "BlinkMacSystemFont", "PingFang TC", "Noto Sans TC", sans-serif !important; 
+    }
+    
+    /* 蘋果風格統計卡片 */
+    .stMetric {
+        background-color: white;
+        padding: 24px;
+        border-radius: 24px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.03);
+        border: 1px solid rgba(0,0,0,0.05);
+    }
+    
+    /* 表格編輯器優化 */
+    div[data-testid="stDataEditor"] {
+        border-radius: 24px !important;
+        overflow: hidden;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.03);
+    }
 
-.topbar{
-  display:flex; align-items:center; justify-content:space-between;
-  background:rgba(255,255,255,.88);
-  border:1px solid var(--line);
-  box-shadow:var(--shadow);
-  border-radius:var(--r);
-  padding:14px 18px;
-  margin-bottom:14px;
-}
-.brand{ display:flex; align-items:center; gap:10px; }
-.logo{
-  width:36px; height:36px; border-radius:12px;
-  display:flex; align-items:center; justify-content:center;
-  background:rgba(0,0,0,.04); border:1px solid var(--line);
-  font-size:18px;
-}
-.title{ font-size:1.35rem; font-weight:900; letter-spacing:-0.02em; margin:0; }
-.small{ color:var(--muted); font-size:.92rem; }
-
-.card{
-  background:var(--card);
-  border:1px solid var(--line);
-  border-radius:var(--r);
-  box-shadow:var(--shadow);
-  padding:18px;
-  margin-bottom:14px;
-}
-
-.stButton>button{
-  border-radius:14px; padding:10px 16px; background:#111; color:#fff; font-weight:800;
-  border:1px solid var(--line);
-}
-.stButton>button:hover{ opacity:.92; }
-
-div[data-testid="stTextInput"] input,
-div[data-testid="stTextArea"] textarea,
-div[data-testid="stDateInput"] input,
-div[data-testid="stSelectbox"] > div{ border-radius:14px !important; }
-
-.badge{
-  display:inline-block;
-  padding:4px 10px;
-  border-radius:999px;
-  font-size:.82rem;
-  border:1px solid rgba(0,0,0,.08);
-  background:rgba(0,0,0,.03);
-  color:#1D1D1F;
-}
-.badge-ok{ background:rgba(52,199,89,.12); border-color:rgba(52,199,89,.22); }
-.badge-warn{ background:rgba(255,149,0,.12); border-color:rgba(255,149,0,.22); }
-.badge-danger{ background:rgba(255,59,48,.12); border-color:rgba(255,59,48,.22); }
-
-.k-grid{
-  display:grid;
-  grid-template-columns:repeat(3, minmax(0, 1fr));
-  gap:12px;
-  align-items:stretch;
-}
-@media (max-width: 1024px){
-  .k-grid{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 640px){
-  .k-grid{ grid-template-columns:repeat(1, minmax(0, 1fr)); }
-}
-
-.k-card{
-  background:#fff;
-  border:1px solid rgba(0,0,0,0.06);
-  border-radius:18px;
-  box-shadow:0 10px 26px rgba(0,0,0,0.06);
-  padding:14px 14px 12px 14px;
-  height: 245px;
-  display:flex;
-  flex-direction:column;
-  overflow:hidden;
-}
-.k-title{
-  font-size:1.05rem; font-weight:900; letter-spacing:-0.01em; margin:0; color:#1D1D1F;
-  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
-}
-.k-sub{ margin-top:4px; color:#6E6E73; font-size:.9rem; }
-.k-row{ margin-top:10px; display:flex; flex-wrap:wrap; gap:6px; }
-.k-meta{
-  margin-top:10px;
-  font-size:.9rem;
-  line-height:1.35;
-  color:#1D1D1F;
-  flex:1 1 auto;
-  overflow:hidden;
-}
-.k-meta span{ color:#6E6E73; }
-.ellipsis{
-  display:block;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-}
-.ellipsis2{
-  display:-webkit-box;
-  -webkit-line-clamp:2;
-  -webkit-box-orient:vertical;
-  overflow:hidden;
-}
+    /* 側邊欄背景 */
+    [data-testid="stSidebar"] {
+        background-color: white;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="topbar">'
-    '  <div class="brand">'
-    '    <div class="logo">🏫</div>'
-    '    <div>'
-    '      <div class="title">小太陽｜幼兒園管理系統</div>'
-    '      <div class="small">新生登記</div>'
-    '    </div>'
-    '  </div>'
-    '</div>',
-    unsafe_allow_html=True
-)
+# ==========================================
+# 1. 雲端連線配置 (完全對齊您的 Excel 11 欄結構)
+# ==========================================
 
-# =========================
-# 2) 你的 Sheet 位置（請確認你看的也是 enrollments 分頁）
-# =========================
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pz7z9CdU8MODTdXbckXCnI0NpjXquZDcZCC-DTOen3o/edit?usp=sharing"
-WORKSHEET_NAME = "enrollments"  # ✅ 你 App 寫入的就是這個分頁
+GSHEET_ID = "1ZofZnB8Btig_6XvsHGh7bbapnfJM-vDkXTFpaU7ngmE"
 
-# ✅ 你目前要的欄位
-NEEDED_COLS = [
-    "報名狀態", "聯繫狀態", "登記日期", "幼兒姓名", "家長稱呼", "電話",
-    "幼兒生日", "預計入學資訊", "推薦人", "備註", "重要性"
+GOOGLE_JSON_KEY = {
+  "type": "service_account",
+  "project_id": "gen-lang-client-0350949155",
+  "private_key_id": "0bc65fcf31f2bc625d4283024181f980b94e2d61",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQC2d0a4Jmkhn/gS\nOmYM0zbKtBMteB/pnmSqD8S0khV+9Upr1KRx2sjQ+YqYuYxa6wCX6zNCSclYTs0x\nAHg3qvEQXZ59UgUz8BWKOE59oI3o5rEDWhvBFu7KsXsugFXbgYGa4zTFGKHL7vMB\n4mtI48NwFeqZ/Jx7pJfbZ74j0hj71DWGGoKXWi8gPiC5Cj1HWDByveniWIFK5FOd\nPvcJD0e0jNPPbe/dvlyWs9vwRj6aLSyEFxoTb+uLelAQj3Mq4I6RUyzYPv+j/+5w\nvKbqbF+nox77OGvvTFdpUiY5t5PDVpObAiSSn1jGlB1dMDfJQ8G+73CK+YlKvTKf\nOjCUgZeHAgMBAAECggEAGhfciSEVD7Xsp86qIVNjFoHB7FKtXZ9FDfzLSHdLk6hI\nSDtUeOOsrBXDeCuwop/Qqej8n5IltPcv6L4EcxGC/7AjphBApjjDG80JjHWVVaUH\n007jgS1iYKIY14GKxaUzf47WUQlAugUlwzM53GaV4EWCExtI1XWoMbwYOM8mu3xT\ne8BA9cvt1a8CJjWmKgChin3qi1YEinKNudO4rJOMPCq+kVSWVEphy7XndlNWLm7E\nY5BGr+pCGGoHHlqWMotQpBuL4KzTUKom/cDj16Hk3sr8lU5wP2dXa8/ftHfSzfYp\n4THbqi9ote5CFlymVPeS6c3uEtX20ALPlg5eXA4qYQKBgQDhrGo4v7VTED01mLBk\ng2FFSigYexlHqJZRNoBuccIGgTfbKmWIDI1FQAE3klml6ZAJudejIWf902+dX7sQ\n/NsnRLeNtc1Et/HnPuNVPUwMflphZ56o2BedBRZ1UXswlfKgCE0SrSjGp1cx7nsB\S+ZoiFynEpL1PAd4tqvG+IrRewKBgQDO/HDls+Qh1i5gOLjI7pwGf3aKdVONGODa\LsNF0vPbRGeUjxgmBIZ6DdQZRUOOCw547w0IlgHBSSNLbZZOzz/9cMS0U0PXLh41\TkKaih14ZpV1kK1i/9XP1HbQlW2vLLVbD7Wzti2dOujJp1cCp9C7ZtgP7FOFlLrD\nY/fyqpc2ZQKBgQCSCIlAKcZDdwm06haTJHVIakFh/h6QwWZsLVGUpqaAoROtDlVf\YYf1XQKsnFbIx0g/EvSYiqCJn03lz7H0vzttwMjquc+X/VRbaNWhLiZNG2KPD4eb\nCSLWqBktV8nY2d+EcXq2cDknu9fv5rvQTfZOhJc4Qgu5B9xp4ANuoRzriwKBgQC7\nDDWZ3q7SRRMzsQ6LxdUJqjYdeVk/sLPBd3DPsIreIzrXbViNQpmjwstg6s7ZlfRG\nJQDKOYTsfoN+rlGednuFNFsN+hDca7iww0A9F4L6QvndfBiz1i4J2h5k8CRmoShi\nWhgBhyhBZfLoCGkA5VYjhBTMjuwLUxRTbgurJ63uYQKBgQC3NOVqMlBubI6D1/LM\nlD8HYsZxl1VsNa3wqalvqJLFgOzVSSn9UXdjNxq1Wz3VUKV5GdwVsuUWIDJ6jMyQ\nctis0id1NLpIvUNnY5VYbsX/WP/nRCUYNKfuE4LgpQoCbbmNs0bHXYUmASg4Fg/0\nUKv2TDsqoh5Yi6nl4kYEH5jSBw==\n-----END PRIVATE KEY-----\n",
+  "client_email": "keng067558@gen-lang-client-0350949155.iam.gserviceaccount.com",
+  "client_id": "114682091672664451195",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/keng067558%40gen-lang-client-0350949155.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
+
+# 嚴格對齊您的 Excel 欄位順序 (11 欄)
+HEADERS = [
+    "報名狀態", "聯繫狀態", "登記日期", "幼兒姓名", "家長稱呼", 
+    "電話", "幼兒生日", "預計入學資訊", "推薦人", "備註", "重要性"
 ]
 
-REPORT_STATUS = ["新登記", "候補", "已入學", "不錄取"]
-CONTACT_STATUS = ["未聯繫", "已聯繫", "已參觀", "無回應"]
-IMPORTANCE = ["高", "中", "低"]
-
-# =========================
-# 3) Google Sheets（gspread）
-# =========================
 @st.cache_resource
 def get_gspread_client():
-    import gspread
-    from google.oauth2.service_account import Credentials
-
-    if "GOOGLE_SERVICE_ACCOUNT_JSON" not in st.secrets:
-        raise RuntimeError("找不到 Secrets：GOOGLE_SERVICE_ACCOUNT_JSON")
-
-    sa = st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]
-    sa_info = json.loads(sa) if isinstance(sa, str) else dict(sa)
-
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(GOOGLE_JSON_KEY, scope)
     return gspread.authorize(creds)
 
-def open_ws():
-    gc = get_gspread_client()
-    sh = gc.open_by_url(SPREADSHEET_URL)
-    return sh.worksheet(WORKSHEET_NAME)
-
-def _clean_header(header: list) -> list:
-    header = [("" if h is None else str(h)).strip() for h in header]
-    seen = {}
-    fixed = []
-    for h in header:
-        if h == "":
-            h = "未命名欄位"
-        if h not in seen:
-            seen[h] = 1
-            fixed.append(h)
-        else:
-            seen[h] += 1
-            fixed.append(f"{h}({seen[h]})")
-    return fixed
-
-def get_sheet_header(ws) -> list:
-    values = ws.get_all_values()
-    if not values:
-        return []
-    return _clean_header(values[0])
-
-def _norm_colname(s: str) -> str:
-    if s is None:
-        return ""
-    s = str(s).replace("\u3000", " ").strip()
-    s = re.sub(r"\s+", "", s)
-    return s
-
-def _build_needed_to_actual_map(clean_header: list) -> dict:
-    norm_to_actuals = {}
-    for h in clean_header:
-        base = h.split("(")[0] if "(" in h else h
-        key = _norm_colname(base)
-        norm_to_actuals.setdefault(key, []).append(h)
-
-    m = {}
-    for need in NEEDED_COLS:
-        key = _norm_colname(need)
-        if key in norm_to_actuals and len(norm_to_actuals[key]) > 0:
-            m[need] = norm_to_actuals[key][0]
-        else:
-            m[need] = None
-    return m
-
-def read_df() -> pd.DataFrame:
-    ws = open_ws()
-    values = ws.get_all_values()
-    if not values:
-        return pd.DataFrame(columns=NEEDED_COLS)
-
-    clean_header = _clean_header(values[0])
-    rows = values[1:]
-
-    n = len(clean_header)
-    fixed_rows = []
-    for r in rows:
-        r = list(r)
-        if len(r) < n:
-            r = r + [""] * (n - len(r))
-        elif len(r) > n:
-            r = r[:n]
-        fixed_rows.append(r)
-
-    df_raw = pd.DataFrame(fixed_rows, columns=clean_header)
-    col_map = _build_needed_to_actual_map(clean_header)
-
-    df = pd.DataFrame()
-    for need in NEEDED_COLS:
-        actual = col_map.get(need)
-        if actual and actual in df_raw.columns:
-            df[need] = df_raw[actual].astype(str)
-        else:
-            df[need] = ""
-
-    df = df.fillna("")
-    df = df[~(df.apply(lambda r: "".join([str(x).strip() for x in r.values]).strip() == "", axis=1))].copy()
-    df.reset_index(drop=True, inplace=True)
-    return df
-
-def append_row(row: dict):
-    ws = open_ws()
-    raw_values = ws.get_all_values()
-
-    if not raw_values:
-        ws.update("A1", [NEEDED_COLS])
-        header = NEEDED_COLS
-    else:
-        header = get_sheet_header(ws)
-
-    out = []
-    for col in header:
-        base = col.split("(")[0] if "(" in col else col
-        out.append(row.get(base, ""))
-
-    ws.append_row(out, value_input_option="USER_ENTERED")
-
-def update_cell_by_row_index(row_index_in_df: int, col_name: str, value: str):
-    ws = open_ws()
-    values = ws.get_all_values()
-    if not values:
-        raise RuntimeError("Excel 目前是空的，沒有標題列可以更新")
-
-    clean_header = _clean_header(values[0])
-    col_map = _build_needed_to_actual_map(clean_header)
-    actual = col_map.get(col_name)
-
-    if not actual:
-        raise RuntimeError(f"Excel 第一列找不到欄位：{col_name}（請確認欄位名稱是否一致/有空白/重複）")
-
-    col_idx = clean_header.index(actual) + 1
-    ws.update_cell(row_index_in_df + 2, col_idx, value)
-
-# =========================
-# 4) 工具
-# =========================
-def normalize_phone(s: str) -> str:
-    return re.sub(r"[^\d]", "", (s or "").strip())
-
-def now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M")
-
-def parse_date_any(x: str):
+def fetch_data():
     try:
-        d = pd.to_datetime(str(x), errors="coerce")
-        if pd.isna(d):
-            return None
-        return d.date()
-    except Exception:
-        return None
+        client = get_gspread_client()
+        sheet = client.open_by_key(GSHEET_ID).get_sheets()[0]
+        data = sheet.get_all_records()
+        
+        if not data and not sheet.get_all_values():
+            sheet.update(range_name='A1', values=[HEADERS])
+            return pd.DataFrame(columns=HEADERS), sheet
+            
+        return pd.DataFrame(data), sheet
+    except Exception as e:
+        st.error(f"雲端連線失敗，請確認已共用給金鑰 Email：{e}")
+        return pd.DataFrame(), None
 
-def calc_age_months(birthday_str: str):
-    b = parse_date_any(birthday_str)
-    if not b:
-        return None
-    today = date.today()
-    days = (today - b).days
-    if days < 0:
-        return None
-    return int(days / 30.44)
+# ==========================================
+# 2. 班別計算邏輯 (台灣 9/1 學制)
+# ==========================================
+def calculate_grade_info(birthday_str):
+    if not birthday_str or "/" not in str(birthday_str): return ""
+    try:
+        parts = str(birthday_str).split('/')
+        roc_year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+        ce_year = roc_year + 1911
+        today = date.today()
+        # 決定基準年
+        target_year = today.year if today.month < 9 else today.year + 1
+        age = target_year - ce_year
+        if month > 9 or (month == 9 and day >= 2): age -= 1
+        
+        grade_map = {2: "幼幼班", 3: "小班", 4: "中班", 5: "大班"}
+        grade_name = grade_map.get(age, f"{age}歲")
+        return f"{target_year - 1911} 學年 - {grade_name}"
+    except: return ""
 
-def age_band_from_months(m):
-    if m is None or pd.isna(m):
-        return "未知"
-    years = int(m) // 12
-    if years >= 6:
-        return "6歲以上"
-    return f"{years}–{years+1}歲"
+# ==========================================
+# 3. 主介面 UI
+# ==========================================
+def main():
+    df, sheet = fetch_data()
+    
+    t1, t2 = st.columns([5, 1])
+    with t1:
+        st.title("🏫 幼兒園招生雲端管理系統")
+        st.caption("✅ 已完全對齊您的 Excel 11 欄位結構")
+    with t2:
+        if st.button("🔄 刷新名單", use_container_width=True): 
+            st.cache_resource.clear()
+            st.rerun()
 
-def badge_for_importance(v: str) -> str:
-    v = (v or "").strip()
-    if v == "高":
-        return "badge badge-danger"
-    if v == "中":
-        return "badge badge-warn"
-    if v == "低":
-        return "badge badge-ok"
-    return "badge"
+    if df.empty and sheet is not None:
+        st.info("👋 歡迎！目前名單是空的，請從側邊欄錄入第一筆資料。")
 
-def safe_text(v) -> str:
-    s = "" if v is None else str(v)
-    s = s.replace("\r\n", "\n").replace("\r", "\n")
-    s = html_escape(s)
-    # 避免任何 markdown code block 干擾
-    s = s.replace("`", "")
-    return s.replace("\n", "<br>")
+    # 數據統計看板
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("總登記人數", len(df))
+    m2.metric("待聯繫名單", len(df[df["聯繫狀態"] == '未聯繫']) if not df.empty else 0)
+    m3.metric("排隊中", len(df[df["報名狀態"] == '排隊等待']) if not df.empty else 0)
+    m4.metric("同步狀態", "連線正常")
 
-def plain(v) -> str:
-    return "" if v is None else str(v).strip()
+    st.divider()
 
-def make_admin_key(row: pd.Series) -> str:
-    return f"{plain(row.get('幼兒姓名'))}｜{plain(row.get('電話'))}｜{plain(row.get('登記日期'))}"
+    # 搜尋與篩選
+    search = st.text_input("🔍 搜尋 (姓名、電話、家長或備註)", placeholder="輸入搜尋內容...")
+    
+    display_df = df.copy()
+    if search:
+        mask = display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)
+        display_df = display_df[mask]
 
-# ✅ 這裡是本次重點：HTML 完全不縮排、不先換行（避免被當 code block）
-def render_cards_aligned(data: pd.DataFrame):
-    st.markdown('<div class="k-grid">', unsafe_allow_html=True)
-
-    for _, r in data.iterrows():
-        m = r.get("月齡")
-        if m is None or pd.isna(m):
-            age_text = "年齡：—"
-        else:
-            m = int(m)
-            age_text = f"年齡：{m//12}歲{m%12}月"
-
-        imp = plain(r.get("重要性"))
-
-        html = (
-            f'<div class="k-card">'
-            f'  <div>'
-            f'    <div class="k-title">{safe_text(r.get("幼兒姓名") or "—")}</div>'
-            f'    <div class="k-sub">{safe_text(age_text)}</div>'
-            f'    <div class="k-row">'
-            f'      <span class="badge">報名：{safe_text(r.get("報名狀態") or "—")}</span>'
-            f'      <span class="badge">聯繫：{safe_text(r.get("聯繫狀態") or "—")}</span>'
-            f'      <span class="{badge_for_importance(imp)}">重要性：{safe_text(imp or "—")}</span>'
-            f'    </div>'
-            f'  </div>'
-            f'  <div class="k-meta">'
-            f'    <div class="ellipsis"><span>家長：</span>{safe_text(r.get("家長稱呼") or "—")}　<span>電話：</span>{safe_text(r.get("電話") or "—")}</div>'
-            f'    <div class="ellipsis"><span>登記：</span>{safe_text(r.get("登記日期") or "—")}</div>'
-            f'    <div class="ellipsis2"><span>推薦人：</span>{safe_text(r.get("推薦人") or "—")}</div>'
-            f'    <div class="ellipsis2"><span>備註：</span>{safe_text(r.get("備註") or "—")}</div>'
-            f'  </div>'
-            f'</div>'
+    # 名單編輯區
+    if not display_df.empty:
+        st.subheader("📋 招生名單明細 (直接修改後按儲存)")
+        
+        # 確保顯示順序符合 HEADERS
+        display_df = display_df[HEADERS]
+        
+        # 表格編輯器
+        updated_df = st.data_editor(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            column_config={
+                "報名狀態": st.column_config.SelectboxColumn("報名狀態", options=["排隊等待", "已入學", "取消報名", "候補中"]),
+                "聯繫狀態": st.column_config.SelectboxColumn("聯繫狀態", options=["未聯繫", "聯繫中", "已聯繫", "電話未接"]),
+                "幼兒姓名": st.column_config.TextColumn("幼兒姓名", required=True),
+                "重要性": st.column_config.SelectboxColumn("重要性", options=["高", "中", "低"]),
+                "備註": st.column_config.TextColumn("備註內容", width="large"),
+                "預計入學資訊": st.column_config.TextColumn("學年班別"),
+                "登記日期": st.column_config.TextColumn("登記日期", disabled=True)
+            }
         )
-        st.markdown(html, unsafe_allow_html=True)
-
-        with st.expander(f"查看詳細：{plain(r.get('幼兒姓名'))}（{plain(r.get('電話'))}）", expanded=False):
-            for col in NEEDED_COLS:
-                st.markdown(f"- **{col}**：{plain(r.get(col)) or '—'}")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# =========================
-# 5) 分頁
-# =========================
-tab_enroll, tab_other = st.tabs(["新生登記", "（其他模組）"])
-
-with tab_enroll:
-    t_form, t_list = st.tabs(["表單", "名單"])
-
-    with t_form:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 新生登記")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        with st.form("enroll_form", clear_on_submit=True):
-            a, b, c = st.columns(3)
-            with a:
-                report_status = st.selectbox("報名狀態", REPORT_STATUS, index=0)
-            with b:
-                contact_status = st.selectbox("聯繫狀態", CONTACT_STATUS, index=0)
-            with c:
-                importance = st.selectbox("重要性", IMPORTANCE, index=1)
-
-            d, e = st.columns(2)
-            with d:
-                child_name = st.text_input("幼兒姓名 *", placeholder="例如：王小明")
-            with e:
-                parent_title = st.text_input("家長稱呼 *", placeholder="例如：王爸爸／王媽媽")
-
-            f, g = st.columns(2)
-            with f:
-                phone = st.text_input("電話 *", placeholder="例如：0912345678")
-            with g:
-                child_bday = st.date_input("幼兒生日 *", value=date(2022, 1, 1))
-
-            enroll_info = st.text_input("預計入學資訊（可留空）", placeholder="例如：115小班／2026-09")
-            referrer = st.text_input("推薦人（選填）", placeholder="選填")
-            notes = st.text_area("備註（選填）", placeholder="選填")
-
-            submitted = st.form_submit_button("送出", use_container_width=True)
-
-        if submitted:
-            phone_clean = normalize_phone(phone)
-            errors = []
-            if not child_name.strip():
-                errors.append("請填寫幼兒姓名")
-            if not parent_title.strip():
-                errors.append("請填寫家長稱呼")
-            if len(phone_clean) < 9:
-                errors.append("請填寫正確電話")
-
-            if errors:
-                st.error("請修正：\n- " + "\n- ".join(errors))
-            else:
-                try:
-                    df_exist = read_df()
-                    exists = (df_exist["電話"].astype(str).apply(normalize_phone) == phone_clean).any() if len(df_exist) else False
-                except Exception as e:
-                    st.error("讀取資料失敗，無法做防重複檢查")
-                    st.code(str(e))
-                    st.stop()
-
-                if exists:
-                    st.warning("這支電話已經登記過（已阻擋重複報名）")
-                else:
-                    row = {col: "" for col in NEEDED_COLS}
-                    row["報名狀態"] = report_status
-                    row["聯繫狀態"] = contact_status
-                    row["登記日期"] = now_str()
-                    row["幼兒姓名"] = child_name.strip()
-                    row["家長稱呼"] = parent_title.strip()
-                    row["電話"] = phone_clean
-                    row["幼兒生日"] = str(child_bday)
-                    row["預計入學資訊"] = (enroll_info or "").strip()
-                    row["推薦人"] = (referrer or "").strip()
-                    row["備註"] = (notes or "").strip()
-                    row["重要性"] = importance
-
-                    try:
-                        append_row(row)
-                        st.success("已送出")
-                    except Exception as e:
-                        st.error("寫入失敗")
-                        st.code(str(e))
-
-    with t_list:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 名單（卡片對齊）")
-        st.markdown('<div class="small">上方用兩個大按鈕快速切換：未聯繫 / 已聯繫</div>', unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        try:
-            df = read_df()
-        except Exception as e:
-            st.error("讀取失敗")
-            st.code(str(e))
-            st.stop()
-
-        if len(df) == 0:
-            st.info("目前沒有資料")
-        else:
-            tmp = df.copy()
-            tmp["月齡"] = tmp["幼兒生日"].apply(calc_age_months)
-            tmp["年齡段"] = tmp["月齡"].apply(age_band_from_months)
-
-            if "contact_view" not in st.session_state:
-                st.session_state["contact_view"] = "未聯繫"
-
-            n_un = int((tmp["聯繫狀態"].astype(str).fillna("") == "未聯繫").sum())
-            n_ok = int((tmp["聯繫狀態"].astype(str).fillna("") != "未聯繫").sum())
-
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button(f"未聯繫（{n_un}）", use_container_width=True):
-                    st.session_state["contact_view"] = "未聯繫"
-            with c2:
-                if st.button(f"已聯繫（{n_ok}）", use_container_width=True):
-                    st.session_state["contact_view"] = "已聯繫"
-
-            current = st.session_state["contact_view"]
-            st.caption(f"目前顯示：{current}")
-
-            if current == "未聯繫":
-                data = tmp[tmp["聯繫狀態"].astype(str).fillna("") == "未聯繫"].copy()
-            else:
-                data = tmp[tmp["聯繫狀態"].astype(str).fillna("") != "未聯繫"].copy()
-
-            if len(data) == 0:
-                st.info("目前沒有資料")
-            else:
-                band_order = ["0–1歲","1–2歲","2–3歲","3–4歲","4–5歲","5–6歲","6歲以上","未知"]
-                data["年齡段"] = pd.Categorical(data["年齡段"], categories=band_order, ordered=True)
-                data = data.sort_values(["年齡段", "月齡"], ascending=[True, True]).reset_index(drop=True)
-
-                for band in band_order:
-                    g = data[data["年齡段"] == band].copy()
-                    if len(g) == 0:
-                        continue
-                    with st.expander(f"{band}（{len(g)}）", expanded=True):
-                        render_cards_aligned(g)
-
-            st.markdown("---")
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 後台狀態管理（更新報名/聯繫/重要性）")
-            st.markdown('<div class="small">定位方式：姓名｜電話｜登記日期（因為目前沒用編號欄）</div>', unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            df_admin = df.copy()
-            df_admin["_key"] = df_admin.apply(make_admin_key, axis=1)
-            key_list = df_admin["_key"].tolist()
-
-            target_key = st.selectbox("選擇一筆資料", key_list, key="admin_select_key")
-            row_idx = df_admin.index[df_admin["_key"] == target_key].tolist()[0]
-
-            cur_report = plain(df_admin.loc[row_idx, "報名狀態"]) or "新登記"
-            cur_contact = plain(df_admin.loc[row_idx, "聯繫狀態"]) or "未聯繫"
-            cur_imp = plain(df_admin.loc[row_idx, "重要性"]) or "中"
-
-            a, b, c = st.columns(3)
-            with a:
-                new_report = st.selectbox("報名狀態", REPORT_STATUS,
-                                          index=REPORT_STATUS.index(cur_report) if cur_report in REPORT_STATUS else 0)
-            with b:
-                new_contact = st.selectbox("聯繫狀態", CONTACT_STATUS,
-                                           index=CONTACT_STATUS.index(cur_contact) if cur_contact in CONTACT_STATUS else 0)
-            with c:
-                new_imp = st.selectbox("重要性", IMPORTANCE,
-                                       index=IMPORTANCE.index(cur_imp) if cur_imp in IMPORTANCE else 1)
-
-            if st.button("儲存更新", use_container_width=True):
-                try:
-                    update_cell_by_row_index(row_idx, "報名狀態", new_report)
-                    update_cell_by_row_index(row_idx, "聯繫狀態", new_contact)
-                    update_cell_by_row_index(row_idx, "重要性", new_imp)
-                    st.success("已更新")
+        
+        if st.button("💾 儲存所有變更並同步至 Excel", type="primary"):
+            try:
+                with st.spinner("同步至雲端中..."):
+                    sheet.clear()
+                    data_to_save = [updated_df.columns.values.tolist()] + updated_df.values.tolist()
+                    sheet.update(range_name='A1', values=data_to_save, value_input_option='USER_ENTERED')
+                    st.success("✅ Excel 同步成功！")
+                    time.sleep(1)
                     st.rerun()
-                except Exception as e:
-                    st.error("更新失敗")
-                    st.code(str(e))
+            except Exception as e:
+                st.error(f"儲存失敗：{e}")
+    else:
+        st.info("目前尚無資料數據。")
 
-with tab_other:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### 其他模組")
-    st.markdown('<div class="small">之後你要加：確認就讀名單、在園生名單、收費、出缺勤、班級管理…都放這裡。</div>', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    # 側邊欄：錄入
+    with st.sidebar:
+        st.header("✨ 新增報名登記")
+        with st.form("add_form", clear_on_submit=True):
+            n_name = st.text_input("幼兒姓名")
+            n_parent = st.text_input("家長稱呼 (例：林媽媽)")
+            n_phone = st.text_input("電話*")
+            n_birth = st.text_input("幼兒生日 (110/05/20)")
+            n_ref = st.text_input("推薦人")
+            n_prio = st.selectbox("重要性", ["中", "高", "低"])
+            n_note = st.text_area("詳細備註")
+            
+            if st.form_submit_button("立即寫入雲端 Excel", use_container_width=True):
+                if n_phone:
+                    # 自動推算班別
+                    entry_info = calculate_grade_info(n_birth)
+                    
+                    # 嚴格對齊這 11 個格子的內容順序
+                    new_row = [
+                        "排隊等待",           # 報名狀態
+                        "未聯繫",            # 聯繫狀態
+                        date.today().strftime("%Y/%m/%d"), # 登記日期
+                        n_name,
+                        n_parent,
+                        n_phone,
+                        n_birth,
+                        entry_info,         # 預計入學資訊
+                        n_ref,              # 推薦人
+                        n_note,             # 備註
+                        n_prio              # 重要性
+                    ]
+                    
+                    try:
+                        sheet.append_row(new_row, value_input_option='USER_ENTERED')
+                        st.success(f"🎉 {n_name if n_name else '新名單'} 錄入成功")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"寫入失敗：{e}")
+                else:
+                    st.error("電話為必填項")
+
+if __name__ == "__main__":
+    main()
